@@ -16,7 +16,7 @@ export function NumberFactPage({ kind }: { kind: NumberFactKind }) {
   const [to, setTo] = useState(config.max);
   const [count, setCount] = useState(20);
   const [session, setSession] = useState<{ config: SessionConfig; questions: Question[] } | null>(null);
-  if (session) return <SessionEngine {...session} onExit={() => setSession(null)} />;
+  if (session) return <SessionEngine config={session.config} initialQuestions={session.questions} onExit={() => setSession(null)} />;
   const values = Array.from({ length: config.max - config.min + 1 }, (_, index) => config.min + index);
   const start = () => setSession({ config: { category: config.category, difficulty: 'medium', questionCount: count, mode: 'practice' }, questions: generateNumberFactSet(kind, from, to, count) });
 
