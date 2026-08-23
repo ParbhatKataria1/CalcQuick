@@ -1,6 +1,9 @@
 import type { CategoryId, Difficulty, Question } from '@/types';
 
 export type BankingTechnique = 'complements' | 'compensation' | 'leftToRight' | 'pairing' | 'chunking';
+export type MultiplyDivideTechnique =
+  | 'distributive' | 'nearBase' | 'doubleHalf' | 'squareIdentity' | 'specialMultiplier'
+  | 'reverseMultiplication' | 'breakDividend' | 'simplifyDivision' | 'factorDivision' | 'approximation';
 
 const randomInt = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
@@ -237,6 +240,72 @@ export function generateBankingTechniqueQuestion(technique: BankingTechnique, di
 
 export function generateBankingTechniqueSet(techniques: BankingTechnique[], count: number, difficulty: Difficulty): Question[] {
   return Array.from({ length: count }, (_, index) => generateBankingTechniqueQuestion(techniques[index % techniques.length], difficulty));
+}
+
+export function generateMultiplyDivideQuestion(technique: MultiplyDivideTechnique, difficulty: Difficulty): Question {
+  const multiplierMax = difficulty === 'easy' ? 12 : difficulty === 'medium' ? 25 : 49;
+  if (technique === 'distributive') {
+    const a = randomInt(difficulty === 'easy' ? 12 : 24, difficulty === 'hard' ? 99 : 69);
+    const b = randomInt(11, multiplierMax);
+    const tens = Math.floor(b / 10) * 10;
+    return numberQuestion('multiplication', `${a} × ${b}`, a * b, `Distribute: ${a} × ${tens} + ${a} × ${b - tens}.`);
+  }
+  if (technique === 'nearBase') {
+    const base = difficulty === 'hard' && Math.random() < 0.3 ? 1000 : 100;
+    const offset = choice([-3, -2, -1, 1, 2, 3]);
+    const a = randomInt(24, difficulty === 'easy' ? 69 : 129);
+    return numberQuestion('multiplication', `${a} × ${base + offset}`, a * (base + offset), `Use ${a} × (${base} ${offset < 0 ? '−' : '+'} ${Math.abs(offset)}).`);
+  }
+  if (technique === 'doubleHalf') {
+    const a = choice([12, 16, 20, 24, 25, 32, 40, 48]);
+    const b = randomInt(12, difficulty === 'hard' ? 75 : 48);
+    return numberQuestion('multiplication', `${a} × ${b}`, a * b, `Halve the even factor and double the other until one factor is easy.`);
+  }
+  if (technique === 'squareIdentity') {
+    const center = randomInt(difficulty === 'easy' ? 15 : 30, difficulty === 'hard' ? 100 : 70);
+    const gap = randomInt(1, difficulty === 'hard' ? 6 : 4);
+    return numberQuestion('multiplication', `${center - gap} × ${center + gap}`, center * center - gap * gap, `Use (${center} − ${gap})(${center} + ${gap}) = ${center}² − ${gap}².`);
+  }
+  if (technique === 'specialMultiplier') {
+    const special = choice([5, 25, 50, 125]);
+    const unit = special === 125 ? 8 : special === 25 ? 4 : special === 50 ? 2 : 1;
+    const a = randomInt(3, difficulty === 'hard' ? 30 : 16) * unit;
+    const cue = special === 5 ? '×10 ÷2' : special === 25 ? '×100 ÷4' : special === 50 ? '×100 ÷2' : '×1000 ÷8';
+    return numberQuestion('multiplication', `${a} × ${special}`, a * special, `Special multiplier: ${cue}.`);
+  }
+  if (technique === 'approximation') {
+    const multiplication = Math.random() < 0.5;
+    if (multiplication) {
+      const cleanA = randomInt(2, difficulty === 'hard' ? 20 : 10) * 100;
+      const cleanB = randomInt(2, difficulty === 'hard' ? 50 : 20) * 10;
+      const a = cleanA + randomInt(-8, 8);
+      const b = cleanB + randomInt(-4, 4);
+      return numberQuestion('multiplication', `${a} × ${b} ≈ ?`, cleanA * cleanB, `Round to ${cleanA} × ${cleanB}. Enter the estimated value.`);
+    }
+    const divisor = randomInt(2, 9) * 10;
+    const quotient = randomInt(5, difficulty === 'hard' ? 80 : 30) * 10;
+    const dividend = divisor * quotient + randomInt(-9, 9);
+    return numberQuestion('division', `${dividend} ÷ ${divisor + choice([-1, 1])} ≈ ?`, quotient, `Round to ${divisor * quotient} ÷ ${divisor}. Enter the estimate.`);
+  }
+  const divisor = randomInt(12, difficulty === 'hard' ? 48 : 30);
+  const quotient = randomInt(12, difficulty === 'hard' ? 80 : 50);
+  const dividend = divisor * quotient;
+  if (technique === 'reverseMultiplication') return numberQuestion('division', `${dividend} ÷ ${divisor}`, quotient, `Ask: ${divisor} × what = ${dividend}?`);
+  if (technique === 'breakDividend') {
+    const firstPart = divisor * Math.floor(quotient / 10) * 10;
+    return numberQuestion('division', `${dividend} ÷ ${divisor}`, quotient, `Break ${dividend} into ${firstPart} + ${dividend - firstPart}.`);
+  }
+  if (technique === 'simplifyDivision') {
+    const factor = choice([2, 3, 4, 5, 6]);
+    return numberQuestion('division', `${dividend * factor} ÷ ${divisor * factor}`, quotient, `Divide both numbers by their common factor ${factor} first.`);
+  }
+  const factors = choice([[4, 8], [5, 7], [3, 6], [4, 6]]);
+  const factoredDivisor = factors[0] * factors[1];
+  return numberQuestion('division', `${factoredDivisor * quotient} ÷ ${factoredDivisor}`, quotient, `Factor ${factoredDivisor} as ${factors[0]} × ${factors[1]} and divide in two steps.`);
+}
+
+export function generateMultiplyDivideSet(techniques: MultiplyDivideTechnique[], count: number, difficulty: Difficulty): Question[] {
+  return Array.from({ length: count }, (_, index) => generateMultiplyDivideQuestion(techniques[index % techniques.length], difficulty));
 }
 
 const mixedCategories: CategoryId[] = [
