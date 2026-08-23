@@ -22,6 +22,7 @@ export default function BankingDrillPage() {
   const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [count, setCount] = useState(20);
   const [selected, setSelected] = useState<BankingTechnique | 'path'>('path');
+  const [complementDigits, setComplementDigits] = useState<1 | 2 | 3>(3);
   const [config, setConfig] = useState<SessionConfig | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
 
@@ -29,7 +30,7 @@ export default function BankingDrillPage() {
 
   const start = () => {
     const ids = selected === 'path' ? techniques.map((technique) => technique.id) : [selected];
-    setQuestions(generateBankingTechniqueSet(ids, count, difficulty));
+    setQuestions(generateBankingTechniqueSet(ids, count, difficulty, complementDigits));
     setConfig({ category: 'banking', difficulty, questionCount: count, mode: 'banking' });
   };
 
@@ -68,6 +69,7 @@ export default function BankingDrillPage() {
       </section>
 
       <Card className="grid gap-6 p-5 md:grid-cols-2 md:p-7">
+        {(selected === 'complements' || selected === 'path') && <div className="md:col-span-2"><div className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Complements up to</div><div className="mt-3 grid grid-cols-3 gap-2">{([1, 2, 3] as const).map((digits) => <button type="button" key={digits} onClick={() => setComplementDigits(digits)} className={cn('rounded-xl border px-3 py-3 text-sm font-semibold', complementDigits === digits ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300')}>{digits} digit{digits > 1 ? 's' : ''} <span className="block text-[11px] font-medium opacity-75">to {10 ** digits}</span></button>)}</div><p className="mt-2 text-xs text-slate-500">Includes every complement level up to the selected number of digits.</p></div>}
         <div><div className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Difficulty</div><div className="mt-3 grid grid-cols-3 gap-2">{(['easy', 'medium', 'hard'] as Difficulty[]).map((item) => <button type="button" key={item} onClick={() => setDifficulty(item)} className={cn('rounded-xl border px-3 py-3 text-sm font-semibold capitalize', difficulty === item ? 'border-slate-950 bg-slate-950 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-950' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300')}>{item}</button>)}</div></div>
         <div><div className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Questions</div><div className="mt-3 grid grid-cols-3 gap-2">{[10, 20, 30].map((item) => <button type="button" key={item} onClick={() => setCount(item)} className={cn('rounded-xl border px-3 py-3 text-sm font-semibold', count === item ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300')}>{item}</button>)}</div></div>
         <Button size="lg" className="md:col-span-2" onClick={start}><Play className="size-4 fill-current" /> Start {selected === 'path' ? 'Complete Path' : techniques.find((item) => item.id === selected)?.title}</Button>

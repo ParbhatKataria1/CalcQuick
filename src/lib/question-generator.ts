@@ -200,9 +200,11 @@ function generateBanking(difficulty: Difficulty): Question {
   return numberQuestion('banking', `${a} + ${b}`, a + b, 'Fast DI total');
 }
 
-export function generateBankingTechniqueQuestion(technique: BankingTechnique, difficulty: Difficulty): Question {
+export function generateBankingTechniqueQuestion(technique: BankingTechnique, difficulty: Difficulty, complementMaxDigits?: 1 | 2 | 3): Question {
   if (technique === 'complements') {
-    const base = difficulty === 'easy' ? 10 : difficulty === 'medium' ? 100 : 1000;
+    const maxDigits = complementMaxDigits ?? (difficulty === 'easy' ? 1 : difficulty === 'medium' ? 2 : 3);
+    const digits = randomInt(1, maxDigits);
+    const base = 10 ** digits;
     const value = randomInt(base === 10 ? 1 : base === 100 ? 11 : 101, base - 1);
     return numberQuestion('banking', `${base} − ${value}`, base - value, `Complement to ${base}: what must you add to ${value}?`);
   }
@@ -238,8 +240,8 @@ export function generateBankingTechniqueQuestion(technique: BankingTechnique, di
   return numberQuestion('banking', `${a} ${addition ? '+' : '−'} ${b}`, addition ? a + b : a - b, `Break ${b} into ${hundreds} + ${tens} + ${b % 10}, then move one chunk at a time.`);
 }
 
-export function generateBankingTechniqueSet(techniques: BankingTechnique[], count: number, difficulty: Difficulty): Question[] {
-  return Array.from({ length: count }, (_, index) => generateBankingTechniqueQuestion(techniques[index % techniques.length], difficulty));
+export function generateBankingTechniqueSet(techniques: BankingTechnique[], count: number, difficulty: Difficulty, complementMaxDigits?: 1 | 2 | 3): Question[] {
+  return Array.from({ length: count }, (_, index) => generateBankingTechniqueQuestion(techniques[index % techniques.length], difficulty, complementMaxDigits));
 }
 
 export function generateMultiplyDivideQuestion(technique: MultiplyDivideTechnique, difficulty: Difficulty): Question {
