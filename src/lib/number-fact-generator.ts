@@ -15,7 +15,7 @@ export function generateNumberFactSet(kind: NumberFactKind, from: number, to: nu
   return Array.from({ length: count }, (_, index) => {
     const base = count >= to - from + 1 ? from + (index % (to - from + 1)) : randomInt(from, to);
     if (kind === 'tables') {
-      const multiplier = randomInt(2, 12);
+      const multiplier = randomInt(1, 10);
       return { id: uid(), category: 'tables', prompt: `${base} × ${multiplier}`, answer: String(base * multiplier), numericAnswer: base * multiplier, hint: `Table of ${base}` };
     }
     const power = kind === 'squares' ? 2 : 3;
