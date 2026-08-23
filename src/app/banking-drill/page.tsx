@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { ArrowRight, Brain, Combine, Landmark, Layers3, Play, Route, Scale } from 'lucide-react';
 import { SessionEngine } from '@/components/session-engine';
 import { Card } from '@/components/ui/card';
@@ -38,6 +39,7 @@ export default function BankingDrillPage() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-indigo-500/20 text-indigo-300"><Landmark className="size-6" /></div>
         <h1 className="text-3xl font-bold tracking-tight">Banking Exam Calculation Method</h1>
         <p className="mt-3 max-w-2xl leading-7 text-slate-300">Perform fewer mental operations. Train the five highest-value techniques for simplification, approximation, and Data Interpretation—in the right order.</p>
+        <Link href="/banking-method" className="mt-5 inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-white/10"><Brain className="size-4" /> Read theory and worked examples</Link>
       </div>
 
       <section>

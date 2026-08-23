@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   BarChart3,
+  BookOpen,
   Calculator,
   Flame,
   Gauge,
@@ -29,6 +30,7 @@ const nav = [
   { href: '/practice', label: 'Practice', icon: Calculator },
   { href: '/speed', label: 'Speed Challenge', icon: Gauge },
   { href: '/banking-drill', label: 'Banking Drill', icon: Sparkles },
+  { href: '/banking-method', label: 'Banking Method', icon: BookOpen },
   { href: '/daily-challenge', label: 'Daily Challenge', icon: Target },
   { href: '/mistakes', label: 'Mistakes', icon: Flame },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
