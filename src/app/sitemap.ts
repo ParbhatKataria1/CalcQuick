@@ -5,7 +5,8 @@ import { multiplyDivideTechniques } from '@/constants/multiply-divide-techniques
 export default function sitemap(): MetadataRoute.Sitemap {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
   const routes = [
-    '/', '/practice', '/speed', '/banking-drill', '/banking-method', '/multiply-divide', '/multiply-divide/learn', '/daily-challenge',
+    '/', '/practice', '/speed', '/banking-drill', '/banking-method', '/multiply-divide', '/multiply-divide/learn', '/number-facts',
+    '/number-facts/tables', '/number-facts/squares', '/number-facts/cubes', '/daily-challenge',
     ...bankingTechniques.map(({ id }) => `/banking-method/${id}`),
     ...multiplyDivideTechniques.map(({ id }) => `/multiply-divide/learn/${id}`),
   ];
