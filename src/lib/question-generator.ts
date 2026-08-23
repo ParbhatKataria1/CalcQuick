@@ -1,5 +1,7 @@
 import type { CategoryId, Difficulty, Question } from '@/types';
 
+export type BankingTechnique = 'complements' | 'compensation' | 'leftToRight' | 'pairing' | 'chunking';
+
 const randomInt = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
@@ -193,6 +195,48 @@ function generateBanking(difficulty: Difficulty): Question {
   const a = randomInt(300, difficulty === 'hard' ? 2500 : 1200);
   const b = randomInt(200, difficulty === 'hard' ? 1500 : 800);
   return numberQuestion('banking', `${a} + ${b}`, a + b, 'Fast DI total');
+}
+
+export function generateBankingTechniqueQuestion(technique: BankingTechnique, difficulty: Difficulty): Question {
+  if (technique === 'complements') {
+    const base = difficulty === 'easy' ? 10 : difficulty === 'medium' ? 100 : 1000;
+    const value = randomInt(base === 10 ? 1 : base === 100 ? 11 : 101, base - 1);
+    return numberQuestion('banking', `${base} − ${value}`, base - value, `Complement to ${base}: what must you add to ${value}?`);
+  }
+  if (technique === 'compensation') {
+    const boundary = choice(difficulty === 'easy' ? [100, 200, 300, 500] : difficulty === 'medium' ? [200, 300, 500, 700, 1000] : [500, 1000, 1500, 2000]);
+    const offset = randomInt(1, difficulty === 'hard' ? 9 : 4);
+    const near = boundary - offset;
+    const first = randomInt(Math.max(near + 20, boundary), boundary + (difficulty === 'hard' ? 1800 : 700));
+    const addition = Math.random() < 0.5;
+    return numberQuestion('banking', `${first} ${addition ? '+' : '−'} ${near}`, addition ? first + near : first - near, `${near} = ${boundary} − ${offset}. Use ${addition ? `+${boundary} − ${offset}` : `−${boundary} + ${offset}`}.`);
+  }
+  if (technique === 'leftToRight') {
+    const max = difficulty === 'easy' ? 599 : difficulty === 'medium' ? 999 : 2499;
+    const a = randomInt(200, max);
+    const b = randomInt(120, Math.min(999, max));
+    const hundreds = Math.floor(b / 100) * 100;
+    const tens = Math.floor((b % 100) / 10) * 10;
+    return numberQuestion('banking', `${a} + ${b}`, a + b, `Jump left → right: +${hundreds}, +${tens}, +${b % 10}.`);
+  }
+  if (technique === 'pairing') {
+    const target = difficulty === 'easy' ? 100 : difficulty === 'medium' ? 500 : 1000;
+    const a = randomInt(Math.floor(target * 0.18), Math.floor(target * 0.72));
+    const c = randomInt(Math.floor(target * 0.12), Math.floor(target * 0.65));
+    const values = Math.random() < 0.5 ? [a, c, target - a, target - c] : [a, target - c, c, target - a];
+    return numberQuestion('banking', values.join(' + '), target * 2, `Find two pairs that each make ${target}.`);
+  }
+  const max = difficulty === 'easy' ? 799 : difficulty === 'medium' ? 1499 : 3999;
+  const a = randomInt(350, max);
+  const b = randomInt(121, Math.min(a - 1, difficulty === 'hard' ? 1499 : 699));
+  const addition = Math.random() < 0.5;
+  const hundreds = Math.floor(b / 100) * 100;
+  const tens = Math.floor((b % 100) / 10) * 10;
+  return numberQuestion('banking', `${a} ${addition ? '+' : '−'} ${b}`, addition ? a + b : a - b, `Break ${b} into ${hundreds} + ${tens} + ${b % 10}, then move one chunk at a time.`);
+}
+
+export function generateBankingTechniqueSet(techniques: BankingTechnique[], count: number, difficulty: Difficulty): Question[] {
+  return Array.from({ length: count }, (_, index) => generateBankingTechniqueQuestion(techniques[index % techniques.length], difficulty));
 }
 
 const mixedCategories: CategoryId[] = [
