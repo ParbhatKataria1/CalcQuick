@@ -18,7 +18,7 @@ export default function SpeedPage() {
   const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [config, setConfig] = useState<SessionConfig | null>(null);
 
-  if (config) return <SessionEngine config={config} onExit={() => setConfig(null)} />;
+  if (config) return <SessionEngine config={config} reviewDue onExit={() => setConfig(null)} />;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">

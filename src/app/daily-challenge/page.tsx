@@ -22,7 +22,7 @@ export default function DailyChallengePage() {
   const averageTime = todayQuestions ? totalTime / todayQuestions : 0;
   const complete = todayQuestions >= 50 && accuracy >= 90 && averageTime < 5000;
 
-  if (config) return <SessionEngine config={config} onExit={() => setConfig(null)} />;
+  if (config) return <SessionEngine config={config} reviewDue onExit={() => setConfig(null)} />;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">

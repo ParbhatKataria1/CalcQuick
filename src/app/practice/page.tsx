@@ -13,7 +13,7 @@ export default function PracticePage() {
     setWeak(new URLSearchParams(window.location.search).get('weak') === '1');
   }, []);
 
-  if (config) return <SessionEngine config={config} onExit={() => setConfig(null)} />;
+  if (config) return <SessionEngine config={config} reviewDue onExit={() => setConfig(null)} />;
 
   if (weak) {
     return (

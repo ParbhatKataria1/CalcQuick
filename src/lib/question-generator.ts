@@ -343,12 +343,21 @@ export function generateQuestion(category: CategoryId, difficulty: Difficulty, w
   }
 }
 
+/** Reads plain numbers, fractions (100/7) and mixed numbers (14 2/7). */
+function parseNumber(value: string) {
+  const mixed = value.match(/^(-?\d+)\s+(\d+)\s*\/\s*(\d+)$/);
+  if (mixed) return Number(mixed[1]) + Number(mixed[2]) / Number(mixed[3]);
+  const fraction = value.replace(/\s/g, '').match(/^(-?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
+  if (fraction) return Number(fraction[1]) / Number(fraction[2]);
+  return Number(value.replace(/\s/g, ''));
+}
+
 export function isAnswerCorrect(question: Question, rawAnswer: string): boolean {
   const answer = rawAnswer.trim().replace(/\s/g, '');
   if (!answer) return false;
 
   if (question.numericAnswer !== undefined) {
-    const numeric = Number(answer.replace('%', ''));
+    const numeric = parseNumber(rawAnswer.trim().replace('%', ''));
     if (Number.isNaN(numeric)) return false;
     return Math.abs(numeric - question.numericAnswer) <= (question.tolerance ?? 0);
   }

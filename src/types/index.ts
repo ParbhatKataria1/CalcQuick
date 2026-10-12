@@ -23,6 +23,8 @@ export type Question = {
   numericAnswer?: number;
   tolerance?: number;
   hint?: string;
+  /** Every factor pair that makes the prompt's number; the user enters each one. */
+  pairs?: Array<[number, number]>;
 };
 
 export type AnswerRecord = {

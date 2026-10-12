@@ -8,6 +8,8 @@ import { useStats } from '@/context/stats-context';
 import { generateQuestion, getAdaptiveDifficulty, isAnswerCorrect } from '@/lib/question-generator';
 import { categoryLabel } from '@/constants/categories';
 import { getWeakCategories, sessionToXp } from '@/lib/stats';
+import { getDueReviews, recordToQuestion } from '@/lib/review';
+import { checkPairs, pairKey } from '@/lib/factor-pairs';
 import type { AnswerRecord, Difficulty, Question, SessionConfig, SessionRecord } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -15,6 +17,10 @@ type Props = {
   config: SessionConfig;
   onExit: () => void;
   initialQuestions?: Question[];
+  /** Bring a wrongly answered question back later in the same session (once). */
+  repeatMistakes?: boolean;
+  /** Mix in past mistakes that are due for spaced review. */
+  reviewDue?: boolean;
 };
 
 function formatTimer(seconds: number) {
@@ -40,11 +46,21 @@ function playTone(correct: boolean) {
   oscillator.addEventListener('ended', () => audio.close());
 }
 
-export function SessionEngine({ config, onExit, initialQuestions }: Props) {
+const REPEAT_GAP = 3;
+const REPEAT_PREFIX = 'repeat-';
+/** Share of a session that review questions may take, and the cap for endless or timed sessions. */
+const REVIEW_SHARE = 0.25;
+const ENDLESS_REVIEW_LIMIT = 5;
+
+export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes = false, reviewDue = false }: Props) {
   const { stats, recordSession } = useStats();
   const [difficulty, setDifficulty] = useState<Difficulty>(config.difficulty);
   const [question, setQuestion] = useState<Question>(() => initialQuestions?.[0] ?? generateQuestion(config.category, config.difficulty));
   const [answer, setAnswer] = useState('');
+  const [pairRows, setPairRows] = useState<string[][]>([]);
+  const [pairResult, setPairResult] = useState<ReturnType<typeof checkPairs> | null>(null);
+  const [awaitingNext, setAwaitingNext] = useState(false);
+  const pendingAdvanceRef = useRef<(() => void) | null>(null);
   const [records, setRecords] = useState<AnswerRecord[]>([]);
   const [currentStreak, setCurrentStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
@@ -55,6 +71,19 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
   const [remaining, setRemaining] = useState(config.durationSeconds ?? 0);
   const [questionElapsed, setQuestionElapsed] = useState(0);
   const [questionQueue, setQuestionQueue] = useState<Question[]>(initialQuestions?.slice(1) ?? []);
+  const [repeatCount, setRepeatCount] = useState(0);
+  const [retryTarget, setRetryTarget] = useState<number | null>(null);
+  const [reviewPool, setReviewPool] = useState<Question[]>(() => {
+    if (!reviewDue) return [];
+    // Keep reviews on topic: match the categories the session already asks about.
+    const categories = initialQuestions?.length ? new Set(initialQuestions.map((item) => item.category)) : null;
+    const prompts = new Set(initialQuestions?.map((item) => item.prompt));
+    const limit = config.questionCount === 'endless' ? ENDLESS_REVIEW_LIMIT : Math.max(1, Math.floor(config.questionCount * REVIEW_SHARE));
+    return getDueReviews(stats.answers)
+      .filter(({ record }) => (categories ? categories.has(record.category) : config.category === 'mixed' || record.category === config.category) && !prompts.has(record.prompt))
+      .slice(0, limit)
+      .map(({ record }) => recordToQuestion(record, 'review', 'Review — missed in an earlier session'));
+  });
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionStartRef = useRef(Date.now());
   const questionStartRef = useRef(Date.now());
@@ -63,7 +92,8 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
   const finishRequestedRef = useRef(false);
 
   const isSpeed = Boolean(config.durationSeconds);
-  const targetCount = config.questionCount === 'endless' ? null : config.questionCount;
+  const baseTarget = retryTarget ?? (config.questionCount === 'endless' ? null : config.questionCount);
+  const targetCount = baseTarget === null ? null : baseTarget + repeatCount;
   const weakCategories = useMemo(() => getWeakCategories(stats), [stats]);
   const weightedWeak = useMemo(() => weakCategories.flatMap((category) => [category, category, category]), [weakCategories]);
 
@@ -72,15 +102,21 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
   const accuracy = completed ? Math.round((correct / completed) * 100) : 100;
   const progress = targetCount ? Math.min(100, (completed / targetCount) * 100) : 0;
 
-  const getNextQuestion = useCallback((nextDifficulty: Difficulty) => {
-    if (questionQueue.length) {
-      const [next, ...rest] = questionQueue;
+  const getNextQuestion = useCallback((nextDifficulty: Difficulty, queue: Question[], remainingSlots: number | null) => {
+    // Spread due reviews across the session rather than front-loading them.
+    if (reviewPool.length && Math.random() < (remainingSlots === null ? REVIEW_SHARE : reviewPool.length / remainingSlots)) {
+      const [review, ...rest] = reviewPool;
+      setReviewPool(rest);
+      return review;
+    }
+    if (queue.length) {
+      const [next, ...rest] = queue;
       setQuestionQueue(rest);
       return next;
     }
     const weighted = config.mode === 'weak' && weightedWeak.length ? weightedWeak : undefined;
     return generateQuestion(config.category, nextDifficulty, weighted);
-  }, [config.category, config.mode, questionQueue, weightedWeak]);
+  }, [config.category, config.mode, reviewPool, weightedWeak]);
 
   const resetQuestionClock = useCallback(() => {
     accumulatedQuestionMsRef.current = 0;
@@ -175,17 +211,30 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
 
   const submitAnswer = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!answer.trim() || paused || finished || feedback) return;
+    if (pendingAdvanceRef.current) {
+      const advance = pendingAdvanceRef.current;
+      pendingAdvanceRef.current = null;
+      setAwaitingNext(false);
+      advance();
+      return;
+    }
+    // Pair questions may be submitted blank to reveal every pair.
+    if ((!question.pairs && !answer.trim()) || paused || finished || feedback) return;
 
     const responseTimeMs = accumulatedQuestionMsRef.current + Date.now() - questionStartRef.current;
-    const correctAnswer = isAnswerCorrect(question, answer);
+    const pairCheck = question.pairs ? checkPairs(question.pairs, pairRows) : null;
+    const correctAnswer = pairCheck ? pairCheck.correct : isAnswerCorrect(question, answer);
+    const userAnswer = question.pairs
+      ? pairRows.filter((row) => row.some((value) => value?.trim())).map(([a = '', b = '']) => `${a.trim() || '?'} × ${b.trim() || '?'}`).join(', ') || '—'
+      : answer.trim();
+    setPairResult(pairCheck);
     const nextStreak = correctAnswer ? currentStreak + 1 : 0;
     const nextRecord: AnswerRecord = {
       id: question.id,
       category: question.category,
       prompt: question.prompt,
       correctAnswer: question.answer,
-      userAnswer: answer.trim(),
+      userAnswer,
       correct: correctAnswer,
       responseTimeMs,
       timestamp: Date.now(),
@@ -200,13 +249,30 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
     const immediateXp = correctAnswer ? 10 + (responseTimeMs < 3000 ? 5 : 0) + (nextStreak > 0 && nextStreak % 5 === 0 ? 10 : 0) : 0;
     setEarnedXp((value) => value + immediateXp);
 
-    const reachedTarget = targetCount !== null && nextRecords.length >= targetCount;
+    const shouldRepeat = repeatMistakes && !correctAnswer && targetCount !== null && !question.id.startsWith(REPEAT_PREFIX);
+    const nextQueue = shouldRepeat
+      ? [...questionQueue.slice(0, REPEAT_GAP), { ...question, id: `${REPEAT_PREFIX}${question.id}`, hint: 'Missed earlier — try again' }, ...questionQueue.slice(REPEAT_GAP)]
+      : questionQueue;
+    if (shouldRepeat) setRepeatCount((value) => value + 1);
+
+    const reachedTarget = targetCount !== null && nextRecords.length >= targetCount + (shouldRepeat ? 1 : 0);
+    // Missed pairs stay on screen until the user moves on, so there is time to read them.
+    const waitForUser = Boolean(question.pairs) && !correctAnswer;
+    const proceed = (step: () => void, delay: number) => {
+      if (waitForUser) {
+        pendingAdvanceRef.current = step;
+        setAwaitingNext(true);
+      } else {
+        window.setTimeout(step, delay);
+      }
+    };
+
     if (reachedTarget) {
-      window.setTimeout(finishSession, 450);
+      proceed(finishSession, 450);
       return;
     }
 
-    window.setTimeout(() => {
+    proceed(() => {
       const recent = nextRecords.slice(-6);
       const nextDifficulty = getAdaptiveDifficulty(
         difficulty,
@@ -214,23 +280,27 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
         recent.map((record) => record.responseTimeMs),
       );
       setDifficulty(nextDifficulty);
-      setQuestion(getNextQuestion(nextDifficulty));
+      const nextTarget = targetCount === null ? null : targetCount + (shouldRepeat ? 1 : 0);
+      setQuestion(getNextQuestion(nextDifficulty, nextQueue, nextTarget === null ? null : nextTarget - nextRecords.length));
       setAnswer('');
+      setPairRows([]);
+      setPairResult(null);
       setFeedback(null);
       resetQuestionClock();
     }, correctAnswer ? 220 : 650);
   };
 
+  const updatePairRow = (row: number, column: number, value: string) => setPairRows((rows) => {
+    const next = (question.pairs ?? []).map((_, index) => [...(rows[index] ?? ['', ''])]);
+    next[row][column] = value.replace(/\D/g, '');
+    return next;
+  });
+
   const retryMistakes = () => {
-    const mistakes = records.filter((record) => !record.correct).map<Question>((record) => ({
-      id: `retry-${record.id}-${Date.now()}`,
-      category: record.category,
-      prompt: record.prompt,
-      answer: record.correctAnswer,
-      numericAnswer: Number.isFinite(Number(record.correctAnswer)) ? Number(record.correctAnswer) : undefined,
-      tolerance: record.correctAnswer.includes('.') ? 0.05 : 0,
-    }));
+    const mistakes = [...new Map(records.filter((record) => !record.correct).map((record) => [record.prompt, record])).values()].map((record) => recordToQuestion(record, 'retry'));
     if (!mistakes.length) return;
+    pendingAdvanceRef.current = null;
+    setAwaitingNext(false);
     finalizedRef.current = false;
     finishRequestedRef.current = false;
     sessionStartRef.current = Date.now();
@@ -238,12 +308,18 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
     setCurrentStreak(0);
     setBestStreak(0);
     setEarnedXp(0);
+    setRepeatCount(0);
+    // The retry ends after the missed questions instead of topping up with new ones.
+    setRetryTarget(mistakes.length);
+    setReviewPool([]);
     setQuestion(mistakes[0]);
     setQuestionQueue(mistakes.slice(1));
     setRemaining(config.durationSeconds ?? 0);
     setFinished(false);
     setFeedback(null);
     setAnswer('');
+    setPairRows([]);
+    setPairResult(null);
     resetQuestionClock();
   };
 
@@ -343,6 +419,17 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
             {question.hint && <div className="mt-4 text-xs font-medium text-slate-400 dark:text-slate-500">{question.hint}</div>}
 
             <form onSubmit={submitAnswer} className="mt-9 w-full max-w-md">
+              {question.pairs ? (
+                <div className="space-y-2">
+                  {question.pairs.map((_, row) => (
+                    <div key={row} className="flex items-center justify-center gap-3">
+                      <PairInput inputRef={row === 0 ? inputRef : undefined} label={`Pair ${row + 1}, first number`} value={pairRows[row]?.[0] ?? ''} onChange={(value) => updatePairRow(row, 0, value)} />
+                      <span className="text-2xl font-bold text-slate-400">×</span>
+                      <PairInput label={`Pair ${row + 1}, second number`} value={pairRows[row]?.[1] ?? ''} onChange={(value) => updatePairRow(row, 1, value)} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
               <input
                 ref={inputRef}
                 value={answer}
@@ -353,12 +440,24 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
                 placeholder="Type your answer"
                 className="h-16 w-full rounded-2xl border-2 border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-5 text-center text-2xl font-bold text-slate-950 dark:text-slate-50 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 dark:focus:ring-indigo-900/60"
               />
-              <Button type="submit" className="mt-3 w-full" size="lg" disabled={!answer.trim() || Boolean(feedback)}>Submit <span className="ml-auto rounded-md bg-white/15 px-2 py-0.5 text-xs">Enter ↵</span></Button>
+              )}
+              <Button type="submit" className="mt-3 w-full" size="lg" disabled={awaitingNext ? false : (!question.pairs && !answer.trim()) || Boolean(feedback)}>{awaitingNext ? 'Next question' : 'Submit'} <span className="ml-auto rounded-md bg-white/15 px-2 py-0.5 text-xs">Enter ↵</span></Button>
             </form>
 
-            <div className="mt-5 h-6 text-sm font-semibold">
+            <div className="mt-5 min-h-6 text-sm font-semibold">
               {feedback === 'correct' && <span className="inline-flex items-center gap-2 text-emerald-700 dark:text-emerald-300"><Check className="size-4" /> Correct</span>}
-              {feedback === 'incorrect' && <span className="inline-flex items-center gap-2 text-rose-700 dark:text-rose-300"><X className="size-4" /> Correct answer: {question.answer}</span>}
+              {feedback === 'incorrect' && !question.pairs && <span className="inline-flex items-center gap-2 text-rose-700 dark:text-rose-300"><X className="size-4" /> Correct answer: {question.answer}</span>}
+              {feedback === 'incorrect' && question.pairs && pairResult && (
+                <div className="space-y-2">
+                  <div className="text-rose-700 dark:text-rose-300">{question.prompt.split(' =')[0]} is made by:</div>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {question.pairs.map((pair) => {
+                      const found = pairResult.found.has(pairKey(pair));
+                      return <span key={pairKey(pair)} className={cn('inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5', found ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200')}>{found ? <Check className="size-3.5" /> : <X className="size-3.5" />} {pair[0]} × {pair[1]}{found ? '' : ' (missed)'}</span>;
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -372,6 +471,20 @@ export function SessionEngine({ config, onExit, initialQuestions }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+function PairInput({ value, onChange, label, inputRef }: { value: string; onChange: (value: string) => void; label: string; inputRef?: React.Ref<HTMLInputElement> }) {
+  return (
+    <input
+      ref={inputRef}
+      value={value}
+      onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+      inputMode="numeric"
+      autoComplete="off"
+      aria-label={label}
+      className="h-14 w-24 rounded-2xl border-2 border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-center text-2xl font-bold text-slate-950 dark:text-slate-50 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 dark:focus:ring-indigo-900/60"
+    />
   );
 }
 

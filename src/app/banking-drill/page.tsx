@@ -26,7 +26,7 @@ export default function BankingDrillPage() {
   const [config, setConfig] = useState<SessionConfig | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
 
-  if (config) return <SessionEngine config={config} initialQuestions={questions} onExit={() => setConfig(null)} />;
+  if (config) return <SessionEngine config={config} initialQuestions={questions} reviewDue onExit={() => setConfig(null)} />;
 
   const start = () => {
     const ids = selected === 'path' ? techniques.map((technique) => technique.id) : [selected];

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useStats } from '@/context/stats-context';
 import { categoryLabel } from '@/constants/categories';
 import { SessionEngine } from '@/components/session-engine';
+import { recordToQuestion } from '@/lib/review';
 import type { Question, SessionConfig } from '@/types';
 
 export default function MistakesPage() {
@@ -17,14 +18,7 @@ export default function MistakesPage() {
   if (retry) return <SessionEngine config={retry.config} initialQuestions={retry.questions} onExit={() => setRetry(null)} />;
 
   const startRetry = () => {
-    const selected = mistakes.slice(0, 20).map<Question>((record) => ({
-      id: `mistake-${record.id}-${Math.random()}`,
-      category: record.category,
-      prompt: record.prompt,
-      answer: record.correctAnswer,
-      numericAnswer: Number.isFinite(Number(record.correctAnswer)) ? Number(record.correctAnswer) : undefined,
-      tolerance: record.correctAnswer.includes('.') ? 0.05 : 0,
-    }));
+    const selected = mistakes.slice(0, 20).map((record) => recordToQuestion(record, 'mistake'));
     if (!selected.length) return;
     setRetry({ config: { category: 'mixed', difficulty: 'medium', questionCount: selected.length, mode: 'mistakes' }, questions: selected });
   };
