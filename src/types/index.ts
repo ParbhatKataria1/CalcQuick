@@ -25,6 +25,8 @@ export type Question = {
   hint?: string;
   /** Every factor pair that makes the prompt's number; the user enters each one. */
   pairs?: Array<[number, number]>;
+  /** For recall drills: a correct answer slower than this is asked again later in the session. */
+  slowAfterMs?: number;
 };
 
 export type AnswerRecord = {

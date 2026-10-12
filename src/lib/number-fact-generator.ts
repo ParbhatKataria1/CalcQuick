@@ -18,6 +18,9 @@ const TABLE_MULTIPLIERS = [2, 3, 4, 5, 6, 7, 8, 9];
 const HARD_MULTIPLIER_WEIGHT = 3;
 const MISSED_WEIGHT = 4;
 
+/** How long instant recall should take; slower correct answers are asked again later in the session. */
+export const RECALL_LIMIT_MS = { single: 3000, longAnswer: 4000, pairBase: 2000, perPair: 3000 };
+
 export function getPracticeValues(kind: NumberFactKind) {
   const config = numberFactConfig[kind];
   return Array.from({ length: config.max - config.min + 1 }, (_, index) => config.min + index).filter(isPracticeValue);
@@ -27,13 +30,13 @@ export type FactDirection = 'forward' | 'reverse' | 'both';
 
 export type Candidate = { group: number | string; question: () => Question; weight: number };
 
-const fact = (category: CategoryId, prompt: string, answer: number, hint: string): Question => ({ id: uid(), category, prompt, answer: String(answer), numericAnswer: answer, hint });
+const fact = (category: CategoryId, prompt: string, answer: number, hint: string, slowAfterMs: number): Question => ({ id: uid(), category, prompt, answer: String(answer), numericAnswer: answer, hint, slowAfterMs });
 
 function buildCandidates(kind: NumberFactKind, bases: number[], direction: FactDirection, missed: Set<string>): Candidate[] {
   const forward = direction !== 'reverse';
   const reverse = direction !== 'forward';
-  const candidate = (base: number, prompt: string, answer: number, hint: string, weight = 1): Candidate =>
-    ({ group: base, weight: weight * (missed.has(prompt) ? MISSED_WEIGHT : 1), question: () => fact(numberFactConfig[kind].category, prompt, answer, hint) });
+  const candidate = (base: number, prompt: string, answer: number, hint: string, weight = 1, slowAfterMs = RECALL_LIMIT_MS.single): Candidate =>
+    ({ group: base, weight: weight * (missed.has(prompt) ? MISSED_WEIGHT : 1), question: () => fact(numberFactConfig[kind].category, prompt, answer, hint, slowAfterMs) });
   const products = kind === 'tables' && reverse ? buildProductCandidates(bases, missed) : [];
   return [...products, ...bases.flatMap((base) => {
     if (kind === 'tables') {
@@ -48,7 +51,7 @@ function buildCandidates(kind: NumberFactKind, bases: number[], direction: FactD
     const name = power === 2 ? 'Square' : 'Cube';
     const result = base ** power;
     return [
-      ...(forward ? [candidate(base, `${base}${symbol}`, result, `${name} of ${base}`)] : []),
+      ...(forward ? [candidate(base, `${base}${symbol}`, result, `${name} of ${base}`, 1, power === 3 ? RECALL_LIMIT_MS.longAnswer : RECALL_LIMIT_MS.single)] : []),
       ...(reverse ? [candidate(base, `?${symbol} = ${result}`, base, `${name} root of ${result}`)] : []),
     ];
   })];
@@ -75,7 +78,7 @@ function buildProductCandidates(bases: number[], missed: Set<string>): Candidate
     return {
       group: entry.table,
       weight: (entry.hard ? HARD_MULTIPLIER_WEIGHT : 1) * (missed.has(prompt) ? MISSED_WEIGHT : 1),
-      question: () => ({ id: uid(), category: 'tables', prompt, answer: formatPairs(pairs), pairs, hint: `Find all ${pairs.length} ${pairs.length === 1 ? 'way' : 'ways'} in ${range}` }),
+      question: () => ({ id: uid(), category: 'tables', prompt, answer: formatPairs(pairs), pairs, hint: `Find all ${pairs.length} ${pairs.length === 1 ? 'way' : 'ways'} in ${range}`, slowAfterMs: RECALL_LIMIT_MS.pairBase + RECALL_LIMIT_MS.perPair * pairs.length }),
     };
   });
 }

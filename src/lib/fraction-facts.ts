@@ -1,5 +1,5 @@
 import type { CategoryId, Question } from '@/types';
-import { pickQuestionSet, type Candidate } from '@/lib/number-fact-generator';
+import { pickQuestionSet, RECALL_LIMIT_MS, type Candidate } from '@/lib/number-fact-generator';
 
 /**
  * Fraction ↔ percentage facts from the banking-exam (IBPS / SBI PO & Clerk) conversion list:
@@ -62,6 +62,7 @@ export function generateFractionSet(sets: FractionSetId[], direction: FractionDi
           // Accepts both the rounded and truncated forms (14.29 or 14.28) and the mixed form 14 2/7.
           tolerance: isTerminating(fact) ? 0 : 0.01,
           hint: isTerminating(fact) ? 'Enter the percentage' : 'Up to 2 decimals (14.28) or mixed form (14 2/7)',
+          slowAfterMs: RECALL_LIMIT_MS.longAnswer,
         }
       : {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -69,6 +70,7 @@ export function generateFractionSet(sets: FractionSetId[], direction: FractionDi
           prompt,
           answer: fractionLabel(fact),
           hint: 'Answer as a fraction, e.g. 3/8',
+          slowAfterMs: RECALL_LIMIT_MS.longAnswer,
         };
     return { group: fact.denominator, weight: missed.has(prompt) ? MISSED_WEIGHT : 1, question };
   }));

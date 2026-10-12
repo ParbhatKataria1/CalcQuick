@@ -17,7 +17,7 @@ type Props = {
   config: SessionConfig;
   onExit: () => void;
   initialQuestions?: Question[];
-  /** Bring a wrongly answered question back later in the same session (once). */
+  /** Bring a wrong — or, for recall drills, slow — answer back later in the same session (once). */
   repeatMistakes?: boolean;
   /** Mix in past mistakes that are due for spaced review. */
   reviewDue?: boolean;
@@ -66,7 +66,7 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
   const [bestStreak, setBestStreak] = useState(0);
   const [paused, setPaused] = useState(false);
   const [finished, setFinished] = useState(false);
-  const [feedback, setFeedback] = useState<'correct' | 'incorrect' | null>(null);
+  const [feedback, setFeedback] = useState<'correct' | 'slow' | 'incorrect' | null>(null);
   const [earnedXp, setEarnedXp] = useState(0);
   const [remaining, setRemaining] = useState(config.durationSeconds ?? 0);
   const [questionElapsed, setQuestionElapsed] = useState(0);
@@ -243,15 +243,16 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
     setRecords(nextRecords);
     setCurrentStreak(nextStreak);
     setBestStreak((value) => Math.max(value, nextStreak));
-    setFeedback(correctAnswer ? 'correct' : 'incorrect');
+    const slow = correctAnswer && question.slowAfterMs !== undefined && responseTimeMs > question.slowAfterMs;
+    setFeedback(slow ? 'slow' : correctAnswer ? 'correct' : 'incorrect');
     if (stats.soundEnabled) playTone(correctAnswer);
 
     const immediateXp = correctAnswer ? 10 + (responseTimeMs < 3000 ? 5 : 0) + (nextStreak > 0 && nextStreak % 5 === 0 ? 10 : 0) : 0;
     setEarnedXp((value) => value + immediateXp);
 
-    const shouldRepeat = repeatMistakes && !correctAnswer && targetCount !== null && !question.id.startsWith(REPEAT_PREFIX);
+    const shouldRepeat = repeatMistakes && (!correctAnswer || slow) && targetCount !== null && !question.id.startsWith(REPEAT_PREFIX);
     const nextQueue = shouldRepeat
-      ? [...questionQueue.slice(0, REPEAT_GAP), { ...question, id: `${REPEAT_PREFIX}${question.id}`, hint: 'Missed earlier — try again' }, ...questionQueue.slice(REPEAT_GAP)]
+      ? [...questionQueue.slice(0, REPEAT_GAP), { ...question, id: `${REPEAT_PREFIX}${question.id}`, hint: slow ? 'Slow earlier — aim for instant recall' : 'Missed earlier — try again' }, ...questionQueue.slice(REPEAT_GAP)]
       : questionQueue;
     if (shouldRepeat) setRepeatCount((value) => value + 1);
 
@@ -287,7 +288,7 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
       setPairResult(null);
       setFeedback(null);
       resetQuestionClock();
-    }, correctAnswer ? 220 : 650);
+    }, correctAnswer && !slow ? 220 : 650);
   };
 
   const updatePairRow = (row: number, column: number, value: string) => setPairRows((rows) => {
@@ -403,7 +404,7 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
         </div>
       )}
 
-      <Card className={cn('relative overflow-hidden p-5 transition-colors sm:p-8 md:p-10', feedback === 'correct' && 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/25', feedback === 'incorrect' && 'border-rose-300 dark:border-rose-700 bg-rose-50/50 dark:bg-rose-950/25')}>
+      <Card className={cn('relative overflow-hidden p-5 transition-colors sm:p-8 md:p-10', feedback === 'correct' && 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/25', feedback === 'slow' && 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/25', feedback === 'incorrect' && 'border-rose-300 dark:border-rose-700 bg-rose-50/50 dark:bg-rose-950/25')}>
         {paused ? (
           <div className="flex min-h-[390px] flex-col items-center justify-center text-center">
             <div className="mb-4 flex size-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"><Pause className="size-7" /></div>
@@ -446,6 +447,7 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
 
             <div className="mt-5 min-h-6 text-sm font-semibold">
               {feedback === 'correct' && <span className="inline-flex items-center gap-2 text-emerald-700 dark:text-emerald-300"><Check className="size-4" /> Correct</span>}
+              {feedback === 'slow' && <span className="inline-flex items-center gap-2 text-amber-700 dark:text-amber-300"><Clock3 className="size-4" /> Correct, but over {((question.slowAfterMs ?? 0) / 1000).toFixed(0)}s{repeatMistakes && !question.id.startsWith(REPEAT_PREFIX) ? ' — it will come back' : ''}</span>}
               {feedback === 'incorrect' && !question.pairs && <span className="inline-flex items-center gap-2 text-rose-700 dark:text-rose-300"><X className="size-4" /> Correct answer: {question.answer}</span>}
               {feedback === 'incorrect' && question.pairs && pairResult && (
                 <div className="space-y-2">
