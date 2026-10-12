@@ -2,13 +2,19 @@ import type { CategoryId, Difficulty, Question } from '@/types';
 
 export type BankingTechnique = 'complements' | 'compensation' | 'leftToRight' | 'pairing' | 'chunking';
 export type MultiplyDivideTechnique =
-  | 'distributive' | 'nearBase' | 'doubleHalf' | 'squareIdentity' | 'specialMultiplier'
+  | 'distributive' | 'crissCross' | 'nearBase' | 'baseMethod' | 'doubleHalf' | 'squareIdentity' | 'specialMultiplier'
+  | 'squareEnding5' | 'squareBase50' | 'squareBase100' | 'squareGeneral' | 'cubeGeneral' | 'squareRoot' | 'cubeRoot'
   | 'reverseMultiplication' | 'breakDividend' | 'simplifyDivision' | 'factorDivision' | 'approximation';
 
 const randomInt = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
 const choice = <T,>(items: T[]) => items[randomInt(0, items.length - 1)];
+/** A random number that isn't a multiple of 10, since those make the tricks trivial. */
+const randomNonRound = (min: number, max: number): number => {
+  const value = randomInt(min, max);
+  return value % 10 === 0 ? randomNonRound(min, max) : value;
+};
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
@@ -274,6 +280,47 @@ export function generateMultiplyDivideQuestion(technique: MultiplyDivideTechniqu
     const a = randomInt(3, difficulty === 'hard' ? 30 : 16) * unit;
     const cue = special === 5 ? '×10 ÷2' : special === 25 ? '×100 ÷4' : special === 50 ? '×100 ÷2' : '×1000 ÷8';
     return numberQuestion('multiplication', `${a} × ${special}`, a * special, `Special multiplier: ${cue}.`);
+  }
+  if (technique === 'crissCross') {
+    const a = randomNonRound(difficulty === 'easy' ? 11 : 21, difficulty === 'easy' ? 49 : 99);
+    const b = randomNonRound(difficulty === 'easy' ? 11 : 21, difficulty === 'hard' ? 99 : 69);
+    return numberQuestion('multiplication', `${a} × ${b}`, a * b, 'Units, cross, tens — right to left.');
+  }
+  if (technique === 'baseMethod') {
+    const [base, spread] = difficulty === 'easy' ? [10, 9] : difficulty === 'medium' ? [100, 12] : choice([[100, 25], [1000, 15]]);
+    // Below 10 the numbers are single digits, so base 10 only uses 11–19.
+    const offset = () => (base === 10 ? 1 : choice([-1, 1])) * randomInt(1, spread);
+    const a = base + offset();
+    const b = base + offset();
+    const signed = (value: number) => (value < 0 ? `−${-value}` : `+${value}`);
+    return numberQuestion('multiplication', `${a} × ${b}`, a * b, `Base ${base}: ${signed(a - base)} and ${signed(b - base)}.`);
+  }
+  if (technique === 'squareEnding5') {
+    const n = difficulty === 'easy' ? randomInt(1, 9) : difficulty === 'medium' ? randomInt(10, 19) : randomInt(20, 99);
+    const value = n * 10 + 5;
+    return numberQuestion('squares', `${value}²`, value * value, `${n} × ${n + 1}, then 25.`);
+  }
+  if (technique === 'squareBase50' || technique === 'squareBase100') {
+    const base = technique === 'squareBase50' ? 50 : 100;
+    const spread = base === 50 ? (difficulty === 'easy' ? 6 : difficulty === 'medium' ? 12 : 20) : (difficulty === 'easy' ? 6 : difficulty === 'medium' ? 15 : 25);
+    const value = base + choice([-1, 1]) * randomInt(1, spread);
+    return numberQuestion('squares', `${value}²`, value * value, `Base ${base}: the difference is ${value - base > 0 ? '+' : '−'}${Math.abs(value - base)}.`);
+  }
+  if (technique === 'squareGeneral') {
+    const value = difficulty === 'hard' ? randomNonRound(101, 299) : randomNonRound(difficulty === 'easy' ? 21 : 31, difficulty === 'easy' ? 69 : 99);
+    return numberQuestion('squares', `${value}²`, value * value, `a = ${Math.floor(value / 10)}, b = ${value % 10}: join a² | b², then add 20ab.`);
+  }
+  if (technique === 'cubeGeneral') {
+    const value = randomNonRound(difficulty === 'easy' ? 11 : 21, difficulty === 'easy' ? 19 : difficulty === 'medium' ? 49 : 99);
+    return numberQuestion('cubes', `${value}³`, value ** 3, `a = ${Math.floor(value / 10)}, b = ${value % 10}: join a³ | b³, then add 30ab × ${value}.`);
+  }
+  if (technique === 'squareRoot') {
+    const root = difficulty === 'hard' ? randomNonRound(101, 199) : randomNonRound(difficulty === 'easy' ? 21 : 31, difficulty === 'easy' ? 59 : 99);
+    return numberQuestion('squareRoots', `√${root * root}`, root, 'Front digits give the tens, the last digit narrows the ones.');
+  }
+  if (technique === 'cubeRoot') {
+    const root = randomNonRound(11, difficulty === 'easy' ? 29 : difficulty === 'medium' ? 59 : 99);
+    return numberQuestion('cubes', `∛${root ** 3}`, root, 'Last digit gives the ones digit, the front group gives the tens.');
   }
   if (technique === 'approximation') {
     const multiplication = Math.random() < 0.5;
