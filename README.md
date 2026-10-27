@@ -25,6 +25,8 @@ A responsive, gamified calculation-practice frontend for SBI Clerk, IBPS Clerk/C
 - Performance analytics with Recharts
 - Browser `localStorage` persistence
 - Responsive sidebar/mobile navigation
+- Every screen has its own URL: sessions keep their settings in the query (`/practice/session?cat=tables&diff=medium&n=20`) and results live at `<setup>/result/[sessionId]`
+- Mock tests from PDFs (Quant, Reasoning, English) in an IBPS / SBI-style exam interface — see below
 
 ## Stack
 
@@ -36,7 +38,7 @@ A responsive, gamified calculation-practice frontend for SBI Clerk, IBPS Clerk/C
 - Lucide React
 - Recharts
 
-No Firebase, API keys, database, or other external credentials are required for this first version.
+Practice needs no API keys or database. Mock tests use a Gemini API key and a local json-server store.
 
 ## Run locally
 
@@ -50,6 +52,29 @@ Then open:
 ```text
 http://localhost:3000
 ```
+
+## Mock tests
+
+1. Put a Gemini key in `.env.local` (see `.env.example`):
+
+   ```bash
+   GEMINI_API_KEY=your-key
+   ```
+
+2. Run the app and the mock-test store together:
+
+   ```bash
+   npm run dev:all   # next dev + json-server on http://localhost:4100 (db.json)
+   ```
+
+3. Open **Mock Tests**, upload a prelims PDF, then generate as many tests as you like.
+
+How it works:
+
+- The PDF is sent to Gemini once (`src/app/api/mock-tests/parse/route.ts`). Numeric Quant questions come back as templates — variables with ranges plus an answer formula — so every test gets fresh numbers locally, with no further API calls (`src/lib/mock-generator.ts`, evaluated safely by `src/lib/expression.ts`).
+- Reasoning, English and Quant that can't be templated (DI, series, puzzles…) get AI-rewritten versions in smaller follow-up calls. Each test prefers versions you haven't seen; **Generate more with AI** adds more.
+- Tests, attempts and papers are saved in `db.json` (git-ignored). Deleting a paper also deletes its tests and attempts.
+- The exam screen copies the IBPS / SBI interface: section tabs, sectional or composite timing, question palette with the official status legend, Save & Next, Mark for Review & Next, Clear Response and the pre-submit summary. Marking is +1 / −0.25. Progress autosaves, so a reload resumes the same question.
 
 ## Production validation
 
@@ -70,13 +95,18 @@ src/
   app/                    # Next.js routes
   components/
     app-shell.tsx         # Responsive application shell
+    exam/                 # IBPS / SBI-style mock test interface
     session-engine.tsx    # Core practice/game loop
+    session-route.tsx     # Builds a session from its URL
     session-setup.tsx     # Practice configuration
     ui/                   # Local UI primitives
   constants/              # Category definitions
   context/                # localStorage stats provider
   lib/
     question-generator.ts # Dynamic question generation + answer checking
+    session-url.ts        # Session settings <-> URL query
+    gemini.ts             # Server-only Gemini calls for mock tests
+    mock-generator.ts     # Builds mock tests from parsed papers
     stats.ts              # Analytics, XP, levels, weak areas
   types/                  # Shared TypeScript models
 ```
