@@ -64,7 +64,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const newCorrect = previous.totalCorrect + answers.filter((answer) => answer.correct).length;
       const totalMs = previous.totalResponseTimeMs + answers.reduce((sum, answer) => sum + answer.responseTimeMs, 0);
       const sessionBest = answers.length ? Math.min(...answers.map((answer) => answer.responseTimeMs)) : null;
-      const allAnswers = [...previous.answers, ...answers].slice(-3000);
+      const allAnswers = [...previous.answers, ...answers.map((answer) => ({ ...answer, sessionId: session.id }))].slice(-3000);
       const allSessions = [...previous.sessions, session].slice(-300);
 
       const todaysSessions = allSessions.filter((item) => localDateKey(item.endedAt) === today);

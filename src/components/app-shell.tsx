@@ -64,7 +64,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {nav.map((item) => {
-          const active = pathname === item.href;
+          // Sub-pages such as a session or its result keep their section highlighted.
+          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           const Icon = item.icon;
           return (
             <Link

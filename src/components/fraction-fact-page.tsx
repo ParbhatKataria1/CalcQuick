@@ -2,15 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, Lightbulb, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { SessionEngine } from '@/components/session-engine';
 import { ChoiceButton } from '@/components/number-fact-page';
-import { useStats } from '@/context/stats-context';
-import { getMissedPrompts } from '@/lib/number-fact-generator';
-import { decimalPercent, fractionCategories, fractionFacts, fractionLabel, fractionSets, generateFractionSet, mixedPercent, type FractionDirection, type FractionSetId } from '@/lib/fraction-facts';
-import type { Question, SessionConfig } from '@/types';
+import { decimalPercent, fractionFacts, fractionLabel, fractionSets, mixedPercent, type FractionDirection, type FractionSetId } from '@/lib/fraction-facts';
+import { specToQuery } from '@/lib/session-url';
 import { cn } from '@/lib/utils';
 
 const directions: Array<{ id: FractionDirection; title: string; detail: string }> = [
@@ -29,19 +27,13 @@ const examTips = [
 ];
 
 export function FractionFactPage() {
-  const { stats } = useStats();
+  const router = useRouter();
   const [sets, setSets] = useState<FractionSetId[]>(['unit', 'multiples']);
   const [direction, setDirection] = useState<FractionDirection>('both');
   const [count, setCount] = useState(20);
-  const [session, setSession] = useState<{ config: SessionConfig; questions: Question[] } | null>(null);
-  if (session) return <SessionEngine config={session.config} initialQuestions={session.questions} repeatMistakes onExit={() => setSession(null)} />;
 
   const toggleSet = (id: FractionSetId) => setSets((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  const start = () => {
-    const missed = getMissedPrompts(Object.values(fractionCategories), stats.answers);
-    const category = direction === 'both' ? 'mixed' : fractionCategories[direction];
-    setSession({ config: { category, difficulty: 'medium', questionCount: count, mode: 'practice' }, questions: generateFractionSet(sets, direction, count, missed) });
-  };
+  const start = () => router.push(`/number-facts/fractions/practice?${specToQuery({ kind: 'fractions', sets, direction, count })}`);
 
   return <div className="mx-auto max-w-6xl space-y-6"><Link href="/number-facts" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-indigo-600"><ArrowLeft className="size-4" /> Number facts</Link>
     <div className="rounded-3xl bg-slate-950 p-7 text-white md:p-10"><BookOpen className="size-8 text-indigo-300" /><h1 className="mt-5 text-3xl font-bold">Fractions & Percentages</h1><p className="mt-3 max-w-2xl leading-7 text-slate-300">The conversion list behind percentage, profit & loss, ratio and data interpretation questions in IBPS and SBI PO & Clerk exams. Seeing 14.28% and thinking 1/7 turns a long calculation into a single division.</p></div>

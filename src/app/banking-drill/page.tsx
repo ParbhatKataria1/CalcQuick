@@ -2,13 +2,14 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowRight, Brain, Combine, Landmark, Layers3, Play, Route, Scale } from 'lucide-react';
-import { SessionEngine } from '@/components/session-engine';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import type { Difficulty, Question, SessionConfig } from '@/types';
+import type { Difficulty } from '@/types';
 import { cn } from '@/lib/utils';
-import { generateBankingTechniqueSet, type BankingTechnique } from '@/lib/question-generator';
+import type { BankingTechnique } from '@/lib/question-generator';
+import { specToQuery } from '@/lib/session-url';
 
 const techniques: Array<{ id: BankingTechnique; title: string; description: string; example: string; icon: typeof Brain }> = [
   { id: 'complements', title: 'Master complements', description: 'Build instant recall to the next 10, 100, or 1000.', example: '37 + 63 = 100', icon: Brain },
@@ -19,19 +20,15 @@ const techniques: Array<{ id: BankingTechnique; title: string; description: stri
 ];
 
 export default function BankingDrillPage() {
+  const router = useRouter();
   const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [count, setCount] = useState(20);
   const [selected, setSelected] = useState<BankingTechnique | 'path'>('path');
   const [complementDigits, setComplementDigits] = useState<1 | 2 | 3>(3);
-  const [config, setConfig] = useState<SessionConfig | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
-
-  if (config) return <SessionEngine config={config} initialQuestions={questions} reviewDue onExit={() => setConfig(null)} />;
 
   const start = () => {
     const ids = selected === 'path' ? techniques.map((technique) => technique.id) : [selected];
-    setQuestions(generateBankingTechniqueSet(ids, count, difficulty, complementDigits));
-    setConfig({ category: 'banking', difficulty, questionCount: count, mode: 'banking' });
+    router.push(`/banking-drill/session?${specToQuery({ kind: 'banking', techniques: ids, difficulty, count, digits: complementDigits })}`);
   };
 
   return (

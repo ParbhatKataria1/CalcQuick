@@ -1,19 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { SessionSetup } from '@/components/session-setup';
-import { SessionEngine } from '@/components/session-engine';
+import { specToQuery } from '@/lib/session-url';
 import type { SessionConfig } from '@/types';
 
 export default function PracticePage() {
+  const router = useRouter();
   const [weak, setWeak] = useState(false);
-  const [config, setConfig] = useState<SessionConfig | null>(null);
 
   useEffect(() => {
     setWeak(new URLSearchParams(window.location.search).get('weak') === '1');
   }, []);
 
-  if (config) return <SessionEngine config={config} reviewDue onExit={() => setConfig(null)} />;
+  const start = ({ category, difficulty, questionCount }: SessionConfig) =>
+    router.push(`/practice/session?${specToQuery({ kind: 'practice', category, difficulty, count: questionCount, weak })}`);
 
   if (weak) {
     return (
@@ -23,11 +25,11 @@ export default function PracticePage() {
           description="This mixed session automatically gives extra weight to the calculation categories where your accuracy or response time needs the most work."
           defaultCategory="mixed"
           mode="weak"
-          onStart={(next) => setConfig({ ...next, category: 'mixed', mode: 'weak' })}
+          onStart={start}
         />
       </div>
     );
   }
 
-  return <SessionSetup onStart={setConfig} />;
+  return <SessionSetup onStart={start} />;
 }

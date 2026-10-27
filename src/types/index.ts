@@ -38,6 +38,8 @@ export type AnswerRecord = {
   correct: boolean;
   responseTimeMs: number;
   timestamp: number;
+  /** The session this answer was given in; missing on answers saved before sessions had their own page. */
+  sessionId?: string;
 };
 
 export type SessionRecord = {
