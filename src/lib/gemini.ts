@@ -18,17 +18,42 @@ function getClient() {
   return client;
 }
 
+/** Waits before each retry while Gemini is overloaded; keeps the whole call well inside the 300 s function limit. */
+const RETRY_DELAYS_MS = [3000, 8000];
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Overloaded (503), internal (500) and gateway errors are usually brief, so they are worth retrying. */
+const isTemporary = (error: unknown) => error instanceof ApiError && [500, 502, 503, 504].includes(error.status);
+
+const models = () => [...new Set([process.env.GEMINI_MODEL || 'gemini-flash-latest', process.env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest'])];
+
 async function generateJson<T>(parts: PartUnion[], schema: object): Promise<T> {
   const gemini = getClient();
+  const request = (model: string) => gemini.models.generateContent({
+    model,
+    contents: [{ role: 'user', parts: parts.map((part) => (typeof part === 'string' ? { text: part } : part)) }],
+    config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4 },
+  });
+
   let text: string | undefined;
-  try {
-    const response = await gemini.models.generateContent({
-      model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
-      contents: [{ role: 'user', parts: parts.map((part) => (typeof part === 'string' ? { text: part } : part)) }],
-      config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4 },
-    });
-    text = response.text;
-  } catch (error) {
+  let lastError: unknown;
+  // Retry the main model a couple of times, then try the lighter fallback model once.
+  const plan = [...[0, ...RETRY_DELAYS_MS].map((delay) => ({ model: models()[0], delay })), ...models().slice(1).map((model) => ({ model, delay: 0 }))];
+  for (const { model, delay } of plan) {
+    if (delay) await sleep(delay);
+    try {
+      text = (await request(model)).text;
+      lastError = undefined;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (!isTemporary(error)) break;
+    }
+  }
+
+  if (lastError) {
+    const error = lastError;
+    if (isTemporary(error)) throw new HttpError('Gemini is overloaded right now (this is on Google\'s side). Wait a few minutes and upload again.', 503);
     if (error instanceof ApiError) {
       if (error.status === 429) throw new HttpError('Gemini quota or rate limit reached. Wait a minute and try again.', 429);
       if (error.status === 400 || error.status === 403) throw new HttpError(`Gemini rejected the request: ${error.message}`, error.status);
