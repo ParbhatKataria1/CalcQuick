@@ -2,26 +2,23 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { SessionEngine } from '@/components/session-engine';
-import { useStats } from '@/context/stats-context';
-import { generateNumberFactSet, getMissedPrompts, getNumberFactRows, getPracticeValues, numberFactConfig, type FactDirection, type NumberFactKind } from '@/lib/number-fact-generator';
-import type { Question, SessionConfig } from '@/types';
+import { getNumberFactRows, getPracticeValues, numberFactConfig, type FactDirection, type NumberFactKind } from '@/lib/number-fact-generator';
+import { specToQuery } from '@/lib/session-url';
 import { cn } from '@/lib/utils';
 
 export function NumberFactPage({ kind }: { kind: NumberFactKind }) {
   const config = numberFactConfig[kind];
-  const { stats } = useStats();
+  const router = useRouter();
   const values = getPracticeValues(kind);
   const [from, setFrom] = useState(values[0]);
   const [to, setTo] = useState(values[values.length - 1]);
   const [count, setCount] = useState(20);
   const [direction, setDirection] = useState<FactDirection>('forward');
-  const [session, setSession] = useState<{ config: SessionConfig; questions: Question[] } | null>(null);
-  if (session) return <SessionEngine config={session.config} initialQuestions={session.questions} repeatMistakes onExit={() => setSession(null)} />;
-  const start = () => setSession({ config: { category: config.category, difficulty: 'medium', questionCount: count, mode: 'practice' }, questions: generateNumberFactSet(kind, from, to, count, direction, getMissedPrompts([config.category], stats.answers)) });
+  const start = () => router.push(`/number-facts/${kind}/practice?${specToQuery({ kind: 'numberFacts', fact: kind, from, to, count, direction })}`);
   const examples = directionExamples[kind];
 
   return <div className="mx-auto max-w-6xl space-y-6"><Link href="/number-facts" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-indigo-600"><ArrowLeft className="size-4" /> Number facts</Link>

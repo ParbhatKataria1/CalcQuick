@@ -1,18 +1,16 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import Link from 'next/link';
 import { CheckCircle2, Clock3, Play, Target, Trophy } from 'lucide-react';
-import { SessionEngine } from '@/components/session-engine';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useStats } from '@/context/stats-context';
-import type { SessionConfig } from '@/types';
 
 const dateKey = (timestamp: number) => new Date(timestamp).toLocaleDateString('en-CA');
 
 export default function DailyChallengePage() {
   const { stats } = useStats();
-  const [config, setConfig] = useState<SessionConfig | null>(null);
   const today = new Date().toLocaleDateString('en-CA');
   const todaySessions = useMemo(() => stats.sessions.filter((session) => dateKey(session.endedAt) === today), [stats.sessions, today]);
   const todayQuestions = todaySessions.reduce((sum, session) => sum + session.total, 0);
@@ -21,8 +19,6 @@ export default function DailyChallengePage() {
   const totalTime = todaySessions.reduce((sum, session) => sum + session.averageTimeMs * session.total, 0);
   const averageTime = todayQuestions ? totalTime / todayQuestions : 0;
   const complete = todayQuestions >= 50 && accuracy >= 90 && averageTime < 5000;
-
-  if (config) return <SessionEngine config={config} reviewDue onExit={() => setConfig(null)} />;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -60,7 +56,7 @@ export default function DailyChallengePage() {
             <h2 className="mt-1 text-xl font-bold">{complete ? 'Daily challenge cleared.' : 'Continue with a focused mixed round.'}</h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">The challenge aggregates all of today&apos;s completed sessions.</p>
           </div>
-          <Button size="lg" onClick={() => setConfig({ category: 'mixed', difficulty: 'medium', questionCount: Math.max(10, 50 - todayQuestions), mode: 'daily' })}><Play className="size-4 fill-current" /> {todayQuestions ? 'Continue Challenge' : 'Start Challenge'}</Button>
+          <Link href="/daily-challenge/session"><Button size="lg"><Play className="size-4 fill-current" /> {todayQuestions ? 'Continue Challenge' : 'Start Challenge'}</Button></Link>
         </div>
       </Card>
     </div>

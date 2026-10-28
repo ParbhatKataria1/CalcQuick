@@ -7,6 +7,7 @@ import {
   BookOpen,
   Calculator,
   Divide,
+  FileText,
   Flame,
   Gauge,
   Grid2X2,
@@ -35,6 +36,7 @@ const nav = [
   { href: '/banking-method', label: 'Banking Method', icon: BookOpen },
   { href: '/multiply-divide', label: 'Multiply & Divide', icon: Divide },
   { href: '/number-facts', label: 'Number Facts', icon: Grid2X2 },
+  { href: '/mock-tests', label: 'Mock Tests', icon: FileText },
   { href: '/daily-challenge', label: 'Daily Challenge', icon: Target },
   { href: '/mistakes', label: 'Mistakes', icon: Flame },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
@@ -49,7 +51,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const level = getLevel(stats.xp);
 
-  if (pathname === '/') return <>{children}</>;
+  // The landing page and the exam screen (which copies the real exam interface) render without the app chrome.
+  if (pathname === '/' || pathname.startsWith('/mock-tests/test/')) return <>{children}</>;
 
   const sidebar = (
     <>
@@ -64,7 +67,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {nav.map((item) => {
-          const active = pathname === item.href;
+          // Sub-pages such as a session or its result keep their section highlighted.
+          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           const Icon = item.icon;
           return (
             <Link

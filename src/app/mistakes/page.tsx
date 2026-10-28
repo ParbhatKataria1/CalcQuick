@@ -1,33 +1,22 @@
 'use client';
 
 import { AlertCircle, RotateCcw } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useStats } from '@/context/stats-context';
 import { categoryLabel } from '@/constants/categories';
-import { SessionEngine } from '@/components/session-engine';
-import { recordToQuestion } from '@/lib/review';
-import type { Question, SessionConfig } from '@/types';
 
 export default function MistakesPage() {
   const { stats } = useStats();
-  const [retry, setRetry] = useState<{ config: SessionConfig; questions: Question[] } | null>(null);
   const mistakes = useMemo(() => [...stats.answers].filter((answer) => !answer.correct).reverse().slice(0, 50), [stats.answers]);
-
-  if (retry) return <SessionEngine config={retry.config} initialQuestions={retry.questions} onExit={() => setRetry(null)} />;
-
-  const startRetry = () => {
-    const selected = mistakes.slice(0, 20).map((record) => recordToQuestion(record, 'mistake'));
-    if (!selected.length) return;
-    setRetry({ config: { category: 'mixed', difficulty: 'medium', questionCount: selected.length, mode: 'mistakes' }, questions: selected });
-  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div><div className="mb-2 text-sm font-semibold text-rose-600 dark:text-rose-400">Review loop</div><h1 className="text-3xl font-bold tracking-tight">Mistakes</h1><p className="mt-2 text-slate-600 dark:text-slate-300">The fastest way to remove recurring calculation errors is to repeat them while they are still fresh.</p></div>
-        {mistakes.length > 0 && <Button onClick={startRetry}><RotateCcw className="size-4" /> Retry recent mistakes</Button>}
+        {mistakes.length > 0 && <Link href="/mistakes/session"><Button><RotateCcw className="size-4" /> Retry recent mistakes</Button></Link>}
       </div>
 
       {mistakes.length ? (

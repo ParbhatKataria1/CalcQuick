@@ -5,3 +5,7 @@ out
 !.env.example
 .DS_Store
 *.log
+
+# Mock tests saved by json-server (npm run db)
+db.json
+*.tsbuildinfo

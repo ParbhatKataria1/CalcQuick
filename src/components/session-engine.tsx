@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { ArrowLeft, Check, Clock3, Flame, Pause, Play, RotateCcw, Target, Trophy, X } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Check, Clock3, Flame, Pause, Play, Target, Trophy, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useStats } from '@/context/stats-context';
@@ -15,7 +17,10 @@ import { cn } from '@/lib/utils';
 
 type Props = {
   config: SessionConfig;
-  onExit: () => void;
+  /** Where Exit leads: the setup screen the session was started from. */
+  exitHref: string;
+  /** The result page for a finished session; the engine navigates there once the session is saved. */
+  resultHref: (sessionId: string) => string;
   initialQuestions?: Question[];
   /** Bring a wrong — or, for recall drills, slow — answer back later in the same session (once). */
   repeatMistakes?: boolean;
@@ -52,7 +57,8 @@ const REPEAT_PREFIX = 'repeat-';
 const REVIEW_SHARE = 0.25;
 const ENDLESS_REVIEW_LIMIT = 5;
 
-export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes = false, reviewDue = false }: Props) {
+export function SessionEngine({ config, exitHref, resultHref, initialQuestions, repeatMistakes = false, reviewDue = false }: Props) {
+  const router = useRouter();
   const { stats, recordSession } = useStats();
   const [difficulty, setDifficulty] = useState<Difficulty>(config.difficulty);
   const [question, setQuestion] = useState<Question>(() => initialQuestions?.[0] ?? generateQuestion(config.category, config.difficulty));
@@ -72,7 +78,6 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
   const [questionElapsed, setQuestionElapsed] = useState(0);
   const [questionQueue, setQuestionQueue] = useState<Question[]>(initialQuestions?.slice(1) ?? []);
   const [repeatCount, setRepeatCount] = useState(0);
-  const [retryTarget, setRetryTarget] = useState<number | null>(null);
   const [reviewPool, setReviewPool] = useState<Question[]>(() => {
     if (!reviewDue) return [];
     // Keep reviews on topic: match the categories the session already asks about.
@@ -92,14 +97,13 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
   const finishRequestedRef = useRef(false);
 
   const isSpeed = Boolean(config.durationSeconds);
-  const baseTarget = retryTarget ?? (config.questionCount === 'endless' ? null : config.questionCount);
+  const baseTarget = config.questionCount === 'endless' ? null : config.questionCount;
   const targetCount = baseTarget === null ? null : baseTarget + repeatCount;
   const weakCategories = useMemo(() => getWeakCategories(stats), [stats]);
   const weightedWeak = useMemo(() => weakCategories.flatMap((category) => [category, category, category]), [weakCategories]);
 
   const completed = records.length;
   const correct = records.filter((record) => record.correct).length;
-  const accuracy = completed ? Math.round((correct / completed) * 100) : 100;
   const progress = targetCount ? Math.min(100, (completed / targetCount) * 100) : 0;
 
   const getNextQuestion = useCallback((nextDifficulty: Difficulty, queue: Question[], remainingSlots: number | null) => {
@@ -204,10 +208,9 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
       bestTimeMs: bestMs,
       bestStreak,
     } satisfies Omit<SessionRecord, 'xpEarned'>;
-    const xpEarned = sessionToXp(baseSession);
-    setEarnedXp(xpEarned);
-    recordSession({ ...baseSession, xpEarned }, records, config.durationSeconds);
-  }, [bestStreak, config, finished, recordSession, records]);
+    recordSession({ ...baseSession, xpEarned: sessionToXp(baseSession) }, records, config.durationSeconds);
+    router.replace(resultHref(baseSession.id));
+  }, [bestStreak, config, finished, recordSession, records, resultHref, router]);
 
   const submitAnswer = (event: React.FormEvent) => {
     event.preventDefault();
@@ -297,93 +300,13 @@ export function SessionEngine({ config, onExit, initialQuestions, repeatMistakes
     return next;
   });
 
-  const retryMistakes = () => {
-    const mistakes = [...new Map(records.filter((record) => !record.correct).map((record) => [record.prompt, record])).values()].map((record) => recordToQuestion(record, 'retry'));
-    if (!mistakes.length) return;
-    pendingAdvanceRef.current = null;
-    setAwaitingNext(false);
-    finalizedRef.current = false;
-    finishRequestedRef.current = false;
-    sessionStartRef.current = Date.now();
-    setRecords([]);
-    setCurrentStreak(0);
-    setBestStreak(0);
-    setEarnedXp(0);
-    setRepeatCount(0);
-    // The retry ends after the missed questions instead of topping up with new ones.
-    setRetryTarget(mistakes.length);
-    setReviewPool([]);
-    setQuestion(mistakes[0]);
-    setQuestionQueue(mistakes.slice(1));
-    setRemaining(config.durationSeconds ?? 0);
-    setFinished(false);
-    setFeedback(null);
-    setAnswer('');
-    setPairRows([]);
-    setPairResult(null);
-    resetQuestionClock();
-  };
-
-  if (finished) {
-    const mistakes = records.filter((record) => !record.correct);
-    const avg = records.length ? records.reduce((sum, record) => sum + record.responseTimeMs, 0) / records.length : 0;
-    const best = records.length ? Math.min(...records.map((record) => record.responseTimeMs)) : 0;
-    return (
-      <div className="mx-auto max-w-5xl space-y-6">
-        <div className="text-center">
-          <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
-            <Trophy className="size-8" />
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight">Session complete</h1>
-          <p className="mt-2 text-slate-600 dark:text-slate-300">Good repetition. Review the misses, then attack them again.</p>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <ResultMetric label="Questions" value={records.length.toString()} />
-          <ResultMetric label="Accuracy" value={`${accuracy}%`} />
-          <ResultMetric label="Average time" value={`${(avg / 1000).toFixed(1)}s`} />
-          <ResultMetric label="Best time" value={`${(best / 1000).toFixed(1)}s`} />
-          <ResultMetric label="Correct" value={correct.toString()} />
-          <ResultMetric label="Incorrect" value={mistakes.length.toString()} />
-          <ResultMetric label="Best streak" value={bestStreak.toString()} />
-          <ResultMetric label="XP earned" value={`+${earnedXp}`} />
-        </div>
-
-        {mistakes.length > 0 ? (
-          <Card className="overflow-hidden">
-            <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
-              <h2 className="font-bold">Mistake review</h2>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">These are the questions worth repeating immediately.</p>
-            </div>
-            <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {mistakes.map((record) => (
-                <div key={record.id} className="grid gap-3 px-5 py-4 text-sm sm:grid-cols-[1fr_auto_auto_auto] sm:items-center">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">{record.prompt}</div>
-                  <div><span className="text-slate-400 dark:text-slate-500">You:</span> <span className="font-semibold text-rose-600 dark:text-rose-400">{record.userAnswer}</span></div>
-                  <div><span className="text-slate-400 dark:text-slate-500">Correct:</span> <span className="font-semibold text-emerald-700 dark:text-emerald-300">{record.correctAnswer}</span></div>
-                  <div className="text-slate-500 dark:text-slate-400">{(record.responseTimeMs / 1000).toFixed(1)}s</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : (
-          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 p-5 text-center text-emerald-800 dark:text-emerald-200">
-            <div className="font-bold">Perfect round — no mistakes to review.</div>
-          </Card>
-        )}
-
-        <div className="flex flex-wrap justify-center gap-3">
-          {mistakes.length > 0 && <Button variant="secondary" onClick={retryMistakes}><RotateCcw className="size-4" /> Practice Mistakes Again</Button>}
-          <Button variant="outline" onClick={onExit}><ArrowLeft className="size-4" /> Back to setup</Button>
-        </div>
-      </div>
-    );
-  }
+  // The result page takes over once the session is saved.
+  if (finished) return null;
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-5 flex items-center justify-between gap-3">
-        <Button variant="ghost" size="sm" onClick={onExit}><ArrowLeft className="size-4" /> Exit</Button>
+        <Link href={exitHref}><Button variant="ghost" size="sm"><ArrowLeft className="size-4" /> Exit</Button></Link>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300">{categoryLabel(config.category)}</span>
           <span className="rounded-full bg-indigo-50 dark:bg-indigo-950/40 px-3 py-1.5 text-xs font-semibold capitalize text-indigo-700 dark:text-indigo-300">{difficulty}</span>
@@ -497,8 +420,4 @@ function MiniMetric({ icon: Icon, label, value, accent = false }: { icon: typeof
       <div className="min-w-0"><div className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{label}</div><div className="mt-0.5 font-bold text-slate-900 dark:text-slate-100">{value}</div></div>
     </Card>
   );
-}
-
-function ResultMetric({ label, value }: { label: string; value: string }) {
-  return <Card className="p-4 text-center"><div className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{label}</div><div className="mt-2 text-2xl font-bold text-slate-950 dark:text-slate-50">{value}</div></Card>;
 }
