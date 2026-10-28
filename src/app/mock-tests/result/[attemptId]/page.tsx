@@ -2,7 +2,8 @@
 
 import { use } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ListChecks, Loader2, RotateCcw, Trophy } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, ListChecks, Loader2, RotateCcw, Trash2, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { mockApi } from '@/lib/mock-api';
@@ -13,6 +14,7 @@ import { MARKS_WRONG, sectionLabel } from '@/types/mock-test';
 
 export default function MockResultPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = use(params);
+  const router = useRouter();
   const { data, error } = useLoad(async () => {
     const attempt = await mockApi.getAttempt(attemptId);
     return { attempt, test: await mockApi.getTest(attempt.testId) };
@@ -36,6 +38,12 @@ export default function MockResultPage({ params }: { params: Promise<{ attemptId
     if (isAttempted(response) && response.selected === question.answerIndex) entry.correct++;
     topics.set(question.topic, entry);
   }));
+  const remove = async () => {
+    if (!window.confirm('Delete this result and its test? This cannot be undone.')) return;
+    await mockApi.deleteAttempt(attempt.id);
+    router.replace('/mock-tests');
+  };
+
   const topicRows = [...topics.entries()].sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total);
 
   return (
@@ -93,6 +101,7 @@ export default function MockResultPage({ params }: { params: Promise<{ attemptId
       <div className="flex flex-wrap justify-center gap-3">
         <Link href={`/mock-tests/result/${attempt.id}/solutions`}><Button><ListChecks className="size-4" /> View solutions</Button></Link>
         <Link href={`/mock-tests/${attempt.sourceId}`}><Button variant="outline"><RotateCcw className="size-4" /> Generate another test</Button></Link>
+        <Button variant="ghost" onClick={remove} className="text-rose-600 hover:text-rose-700 dark:text-rose-400"><Trash2 className="size-4" /> Delete result</Button>
       </div>
     </div>
   );

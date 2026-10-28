@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, RotateCcw, SearchX, Trophy } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, RotateCcw, SearchX, Trash2, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useStats } from '@/context/stats-context';
@@ -15,7 +16,8 @@ type Props = {
 };
 
 export function SessionResult({ sessionId, setupHref, sessionHref }: Props) {
-  const { stats, hydrated } = useStats();
+  const router = useRouter();
+  const { stats, hydrated, deleteSession } = useStats();
   if (!hydrated) return null;
 
   const session = stats.sessions.find((item) => item.id === sessionId);
@@ -31,6 +33,11 @@ export function SessionResult({ sessionId, setupHref, sessionHref }: Props) {
   }
 
   const records = stats.answers.filter((answer) => answer.sessionId === sessionId);
+  const remove = () => {
+    if (!window.confirm('Delete this session? Its answers and XP are removed from your progress.')) return;
+    router.replace(setupHref);
+    deleteSession(sessionId);
+  };
   const mistakes = records.filter((record) => !record.correct);
 
   return (
@@ -80,6 +87,7 @@ export function SessionResult({ sessionId, setupHref, sessionHref }: Props) {
       <div className="flex flex-wrap justify-center gap-3">
         {mistakes.length > 0 && <Link href={`${sessionHref}?retry=${encodeURIComponent(sessionId)}`}><Button variant="secondary"><RotateCcw className="size-4" /> Practice Mistakes Again</Button></Link>}
         <Link href={setupHref}><Button variant="outline"><ArrowLeft className="size-4" /> Back to setup</Button></Link>
+        <Button variant="ghost" onClick={remove} className="text-rose-600 hover:text-rose-700 dark:text-rose-400"><Trash2 className="size-4" /> Delete session</Button>
       </div>
     </div>
   );

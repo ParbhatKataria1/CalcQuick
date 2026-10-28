@@ -6,13 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "db": "node -e \"const fs=require('fs');fs.existsSync('db.json')||fs.copyFileSync('db.example.json','db.json')\" && json-server --watch db.json --port 4100",
-    "dev:all": "concurrently -k -n next,db -c blue,green \"npm:dev\" \"npm:db\""
+    "lint": "eslint"
   },
   "dependencies": {
     "@google/genai": "^2.31.0",
     "@tailwindcss/postcss": "^4.1.12",
+    "@upstash/redis": "^1.40.0",
     "lucide-react": "^0.468.0",
     "next": "^16.2.12",
     "react": "^19.1.1",
@@ -24,10 +23,8 @@
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
-    "concurrently": "^10.0.6",
     "eslint": "^9.17.0",
     "eslint-config-next": "^16.2.12",
-    "json-server": "^0.17.4",
     "typescript": "^5.7.2"
   }
 }

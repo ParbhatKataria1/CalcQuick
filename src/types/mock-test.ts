@@ -136,3 +136,8 @@ export type MockAttempt = {
 
 export const MARKS_CORRECT = 1;
 export const MARKS_WRONG = -0.25;
+
+/** List entries kept beside the full documents, so lists never load whole papers. `bytes` is the stored size. */
+export type SourceSummary = Pick<MockSource, 'id' | 'name' | 'fileName' | 'createdAt'> & { questions: Record<Section, number>; bytes: number };
+export type TestSummary = Pick<MockTest, 'id' | 'sourceId' | 'name' | 'createdAt'> & { bytes: number };
+export type AttemptSummary = Pick<MockAttempt, 'id' | 'testId' | 'sourceId' | 'testName' | 'startedAt' | 'endedAt' | 'score' | 'maxScore'> & { bytes: number };

@@ -1,23 +1,5 @@
 import { UserRound } from 'lucide-react';
 
-const CANDIDATE_KEY = 'calcsprint-candidate-name';
-
-export function readCandidateName() {
-  try {
-    return localStorage.getItem(CANDIDATE_KEY) || 'Candidate';
-  } catch {
-    return 'Candidate';
-  }
-}
-
-export function saveCandidateName(name: string) {
-  try {
-    localStorage.setItem(CANDIDATE_KEY, name.trim() || 'Candidate');
-  } catch {
-    // Storage can be blocked; the name is only a label on the exam screen.
-  }
-}
-
 export function ExamHeader({ title, candidate, timer }: { title: string; candidate: string; timer?: React.ReactNode }) {
   return (
     <header className="flex items-center justify-between gap-4 bg-[#1f4e8c] px-4 py-2 text-white">

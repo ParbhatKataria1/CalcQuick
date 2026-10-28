@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { AuthProvider } from '@/context/auth-context';
 import { StatsProvider } from '@/context/stats-context';
 import { ThemeProvider } from '@/context/theme-context';
 import { AppShell } from '@/components/app-shell';
@@ -27,9 +28,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         <ThemeProvider>
-          <StatsProvider>
-            <AppShell>{children}</AppShell>
-          </StatsProvider>
+          <AuthProvider>
+            <StatsProvider>
+              <AppShell>{children}</AppShell>
+            </StatsProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

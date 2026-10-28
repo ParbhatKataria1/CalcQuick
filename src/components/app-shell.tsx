@@ -12,6 +12,7 @@ import {
   Gauge,
   Grid2X2,
   Home,
+  LogOut,
   Medal,
   Menu,
   Moon,
@@ -19,12 +20,14 @@ import {
   Sparkles,
   Sun,
   Target,
+  TriangleAlert,
   Trophy,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { getLevel } from '@/lib/stats';
+import { useAuth } from '@/context/auth-context';
 import { useStats } from '@/context/stats-context';
 import { useTheme } from '@/context/theme-context';
 
@@ -47,12 +50,13 @@ const nav = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { stats } = useStats();
+  const { stats, syncError } = useStats();
+  const { user, logOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const level = getLevel(stats.xp);
 
-  // The landing page and the exam screen (which copies the real exam interface) render without the app chrome.
-  if (pathname === '/' || pathname.startsWith('/mock-tests/test/')) return <>{children}</>;
+  // The landing page, login pages and the exam screen (which copies the real exam interface) render without the app chrome.
+  if (pathname === '/' || pathname === '/login' || pathname === '/signup' || pathname.startsWith('/mock-tests/test/')) return <>{children}</>;
 
   const sidebar = (
     <>
@@ -134,9 +138,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
-            <div className="flex size-9 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-sm font-bold text-indigo-700 dark:text-indigo-300">P</div>
+            <div className="flex items-center gap-2">
+              <div title={user?.email} className="flex size-9 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-sm font-bold uppercase text-indigo-700 dark:text-indigo-300">{user?.name.charAt(0) ?? ''}</div>
+              <span className="hidden max-w-32 truncate text-sm font-semibold text-slate-700 dark:text-slate-200 md:block">{user?.name}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void logOut()}
+              aria-label="Log out"
+              title="Log out"
+              className="flex size-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white"
+            >
+              <LogOut className="size-4" />
+            </button>
           </div>
         </header>
+        {syncError && (
+          <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 md:px-7 lg:px-8">
+            <TriangleAlert className="size-4 shrink-0" /> Your progress couldn&apos;t be saved: {syncError}
+          </div>
+        )}
         <main className="mx-auto w-full max-w-[1500px] p-4 md:p-7 lg:p-8">{children}</main>
       </div>
     </div>

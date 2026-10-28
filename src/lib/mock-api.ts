@@ -1,55 +1,60 @@
-import type { MockAttempt, MockSource, MockTest, QuestionSet, SetContent } from '@/types/mock-test';
+import type { AttemptSummary, MockAttempt, MockSource, MockTest, Section, SourceSummary, TestSummary } from '@/types/mock-test';
+import type { SectionPlan } from '@/lib/mock-generator';
 
-/** Mock tests are stored by json-server (`npm run db`), so they aren't limited by browser storage. */
-const BASE_URL = process.env.NEXT_PUBLIC_MOCK_API_URL || 'http://localhost:4100';
-
-export class MockServerError extends Error {}
-
+/** Calls the app's own API, which stores mock tests in the signed-in account. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } });
+    response = await fetch(path, init);
   } catch {
-    throw new MockServerError('The mock test server is not running. Start it with `npm run db` (or `npm run dev:all`).');
+    throw new Error('Could not reach the server. Check your connection and try again.');
   }
-  if (response.status === 404) throw new MockServerError('Not found.');
-  if (!response.ok) throw new MockServerError(`The mock test server answered ${response.status}.`);
-  return response.json() as Promise<T>;
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
+  return body as T;
 }
 
-const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
+const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const id = encodeURIComponent;
 
-export const mockApi = {
-  listSources: () => request<MockSource[]>('/sources?_sort=createdAt&_order=desc'),
-  getSource: (id: string) => request<MockSource>(`/sources/${encodeURIComponent(id)}`),
-  createSource: (source: MockSource) => request<MockSource>('/sources', json('POST', source)),
-  updateSource: (id: string, patch: Partial<MockSource>) => request<MockSource>(`/sources/${encodeURIComponent(id)}`, json('PATCH', patch)),
-  deleteSource: (id: string) => request<unknown>(`/sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-
-  getTest: (id: string) => request<MockTest>(`/tests/${encodeURIComponent(id)}`),
-  createTest: (test: MockTest) => request<MockTest>('/tests', json('POST', test)),
-
-  listAttempts: (sourceId?: string) => request<MockAttempt[]>(`/attempts?${sourceId ? `sourceId=${encodeURIComponent(sourceId)}&` : ''}_sort=startedAt&_order=desc`),
-  getAttempt: (id: string) => request<MockAttempt>(`/attempts/${encodeURIComponent(id)}`),
-  findAttemptForTest: async (testId: string) => (await request<MockAttempt[]>(`/attempts?testId=${encodeURIComponent(testId)}`))[0] ?? null,
-  createAttempt: (attempt: MockAttempt) => request<MockAttempt>('/attempts', json('POST', attempt)),
-  updateAttempt: (id: string, patch: Partial<MockAttempt>) => request<MockAttempt>(`/attempts/${encodeURIComponent(id)}`, json('PATCH', patch)),
+export type StorageUsage = {
+  practice: { bytes: number; sessions: number; answers: number };
+  sources: SourceSummary[];
+  attempts: AttemptSummary[];
+  unstartedTests: TestSummary[];
 };
 
-/** Sends a PDF to the server route, which reads it with Gemini. */
-export async function parsePdf(file: File): Promise<{ title: string; sets: QuestionSet[]; warning?: string }> {
-  const form = new FormData();
-  form.append('file', file);
-  const response = await fetch('/api/mock-tests/parse', { method: 'POST', body: form });
-  const body = await response.json().catch(() => ({ error: `Upload failed (${response.status}).` }));
-  if (!response.ok) throw new Error(body.error ?? `Upload failed (${response.status}).`);
-  return body;
-}
+export const mockApi = {
+  listSources: async () => (await request<{ sources: SourceSummary[] }>('/api/mock/sources')).sources,
+  getSource: async (sourceId: string) => (await request<{ source: MockSource }>(`/api/mock/sources/${id(sourceId)}`)).source,
+  renameSource: (sourceId: string, name: string) => request(`/api/mock/sources/${id(sourceId)}`, json('PATCH', { name })),
+  deleteSource: (sourceId: string) => request(`/api/mock/sources/${id(sourceId)}`, { method: 'DELETE' }),
 
-/** Asks Gemini for more versions of the given sets. */
-export async function requestVariants(sets: QuestionSet[], count = 2): Promise<Record<string, SetContent[]>> {
-  const response = await fetch('/api/mock-tests/variants', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sets, count }) });
-  const body = await response.json().catch(() => ({ error: `Request failed (${response.status}).` }));
-  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
-  return body.variants;
-}
+  /** Sends a PDF to be read by Gemini; the paper is saved to the account. */
+  uploadPdf: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{ id: string; warning?: string }>('/api/mock/sources', { method: 'POST', body: form });
+  },
+  generateVariants: (sourceId: string, section: Section) => request<{ added: number }>(`/api/mock/sources/${id(sourceId)}/variants`, json('POST', { section })),
+  createTest: (sourceId: string, timing: MockTest['timing'], sections: SectionPlan[]) => request<{ id: string }>(`/api/mock/sources/${id(sourceId)}/tests`, json('POST', { timing, sections })),
+  getTest: async (testId: string) => (await request<{ test: MockTest }>(`/api/mock/tests/${id(testId)}`)).test,
+
+  listAttempts: async (filter: { sourceId?: string; testId?: string } = {}) =>
+    (await request<{ attempts: AttemptSummary[] }>(`/api/mock/attempts?${new URLSearchParams(filter as Record<string, string>)}`)).attempts,
+  findAttemptForTest: async (testId: string) => {
+    const [summary] = await mockApi.listAttempts({ testId });
+    return summary ? mockApi.getAttempt(summary.id) : null;
+  },
+  startAttempt: async (testId: string) => (await request<{ attempt: MockAttempt }>('/api/mock/attempts', json('POST', { testId }))).attempt,
+  getAttempt: async (attemptId: string) => (await request<{ attempt: MockAttempt }>(`/api/mock/attempts/${id(attemptId)}`)).attempt,
+  saveAttempt: (attemptId: string, patch: Partial<Pick<MockAttempt, 'responses' | 'remainingSeconds' | 'currentSection'>> & { submit?: boolean }) =>
+    request<{ attempt: MockAttempt }>(`/api/mock/attempts/${id(attemptId)}`, json('PATCH', patch)),
+  deleteAttempt: (attemptId: string) => request(`/api/mock/attempts/${id(attemptId)}`, { method: 'DELETE' }),
+
+  storageUsage: () => request<StorageUsage>('/api/storage'),
+  clearStorage: (what: 'attempts' | 'unstartedTests') => request<{ deleted: number }>(`/api/storage?what=${what}`, { method: 'DELETE' }),
+};
+
+export const formatBytes = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(2)} MB`;

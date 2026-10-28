@@ -6,6 +6,6 @@ out
 .DS_Store
 *.log
 
-# Mock tests saved by json-server (npm run db)
-db.json
+# Local development data (used when no Upstash Redis is configured)
+.data/
 *.tsbuildinfo
