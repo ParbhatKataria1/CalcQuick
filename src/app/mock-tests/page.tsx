@@ -88,8 +88,8 @@ function UploadCard() {
     setUploaded(0);
     setBusy({ fileName: file.name, startedAt: Date.now() });
     try {
-      const { id, warning } = await mockApi.uploadPdf(file, user!.id, setUploaded);
-      router.push(`/mock-tests/${id}${warning ? `?warning=${encodeURIComponent(warning)}` : ''}`);
+      const { id } = await mockApi.uploadPdf(file, user!.id, setUploaded);
+      router.push(`/mock-tests/${id}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setBusy(null);
@@ -121,7 +121,7 @@ function UploadCard() {
             ) : (
               <>
                 <div className="mt-4 font-bold">Reading {busy.fileName}</div>
-                <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Gemini is extracting the questions, building Quant templates and writing new versions of the Reasoning and English sets. A full paper takes 1–4 minutes. ({elapsed}s)</p>
+                <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Gemini is extracting the questions and building templates for the calculation questions. A full paper takes 1–3 minutes. ({elapsed}s)</p>
               </>
             )}
           </>

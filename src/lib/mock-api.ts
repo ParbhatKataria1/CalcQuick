@@ -1,6 +1,5 @@
 import { upload, uploadPresigned } from '@vercel/blob/client';
 import type { AttemptSummary, MockAttempt, MockSource, MockTest, Section, SourceSummary, TestSummary } from '@/types/mock-test';
-import type { SectionPlan } from '@/lib/mock-generator';
 
 /** Calls the app's own API, which stores mock tests in the signed-in account. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,7 +50,7 @@ export const mockApi = {
       };
       const blob = config.mode === 'presigned' ? await uploadPresigned(pathname, file, options) : await upload(pathname, file, options);
       onUploadProgress?.(100);
-      return request<{ id: string; warning?: string }>('/api/mock/sources', json('POST', { blobUrl: blob.url, fileName: file.name }));
+      return request<{ id: string }>('/api/mock/sources', json('POST', { blobUrl: blob.url, fileName: file.name }));
     }
     if (file.size > config.directMaxBytes) {
       throw new Error(`PDFs over ${config.directMaxBytes / 1024 / 1024} MB need Vercel Blob. In Vercel, open Storage, connect a Blob store to this project and redeploy.`);
@@ -59,10 +58,13 @@ export const mockApi = {
     const form = new FormData();
     form.append('file', file);
     onUploadProgress?.(100);
-    return request<{ id: string; warning?: string }>('/api/mock/sources', { method: 'POST', body: form });
+    return request<{ id: string }>('/api/mock/sources', { method: 'POST', body: form });
   },
-  generateVariants: (sourceId: string, section: Section) => request<{ added: number }>(`/api/mock/sources/${id(sourceId)}/variants`, json('POST', { section })),
-  createTest: (sourceId: string, timing: MockTest['timing'], sections: SectionPlan[]) => request<{ id: string }>(`/api/mock/sources/${id(sourceId)}/tests`, json('POST', { timing, sections })),
+  /** Writes and reviews versions for a few sets: those without an unseen version, or more for one section. */
+  generateVariants: (sourceId: string, options: { section?: Section; skip?: string[] } = {}) =>
+    request<{ added: number; rejected: string[]; remaining: number; failedSetIds: string[] }>(`/api/mock/sources/${id(sourceId)}/variants`, json('POST', options)),
+  createTest: (sourceId: string, timing: MockTest['timing'], minutes: Partial<Record<Section, number>>) =>
+    request<{ id: string; repeated: number }>(`/api/mock/sources/${id(sourceId)}/tests`, json('POST', { timing, minutes })),
   getTest: async (testId: string) => (await request<{ test: MockTest }>(`/api/mock/tests/${id(testId)}`)).test,
 
   listAttempts: async (filter: { sourceId?: string; testId?: string } = {}) =>

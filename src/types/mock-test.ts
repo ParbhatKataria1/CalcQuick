@@ -14,7 +14,12 @@ export type TemplateVariable = {
   min: number;
   max: number;
   step: number;
+  /** The number in the original question; new numbers keep its size and shape. */
+  value?: number;
 };
+
+/** A number worked out from the variables, e.g. the total in "(a + b) ÷ ? = c" when the answer is picked first. */
+export type DerivedValue = { name: string; expr: string };
 
 /**
  * A numeric question with its numbers replaced by variables, e.g.
@@ -23,6 +28,8 @@ export type TemplateVariable = {
 export type QuestionTemplate = {
   text: string;
   variables: TemplateVariable[];
+  /** Worked out in order after the variables are sampled; may be used in the text and in later formulas. */
+  derived?: DerivedValue[];
   answerExpr: string;
   /** Wrong options built from common mistakes, e.g. compound instead of simple interest. */
   distractorExprs: string[];
@@ -31,6 +38,8 @@ export type QuestionTemplate = {
   optionFormat: string;
   /** Worked solution; may use the variables and {answer}. */
   explanation: string;
+  /** How far the original's wrong options were from its answer (largest relative gap), so new options stay as close. */
+  optionSpread?: number;
 };
 
 export type StaticQuestion = {
@@ -46,6 +55,8 @@ export type SetContent = {
   questions: StaticQuestion[];
 };
 
+export type Difficulty = 'easy' | 'moderate' | 'hard';
+
 /**
  * One or more questions that belong together, as in the real exam: a puzzle with its five
  * questions, or an RC passage with its questions. A standalone question is a set of one.
@@ -54,10 +65,12 @@ export type QuestionSet = {
   id: string;
   section: Section;
   topic: string;
+  /** As rated when the paper was read; new versions must not be easier. */
+  difficulty?: Difficulty;
   original: SetContent;
   /** Present for numeric questions whose numbers can be regenerated locally, one per question. */
   templates?: QuestionTemplate[];
-  /** AI rewrites with new names, numbers or passages, used for sets that can't be templated. */
+  /** AI rewrites with new names, numbers or passages, used for sets that can't be templated. Each has passed the length and review checks. */
   variants: SetContent[];
   /** Variants already given in a test, so the next test prefers unseen ones. */
   usedVariants: number[];

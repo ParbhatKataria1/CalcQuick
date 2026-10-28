@@ -1,8 +1,15 @@
 /**
- * Prompts and JSON schemas for Gemini. Reading a PDF is one call that extracts the questions and
- * writes templates for numeric Quant; rewriting the rest happens in smaller text-only calls, so a
- * long paper never runs into the output limit.
+ * Prompts and JSON schemas for Gemini. Reading a PDF is one call that extracts the questions and writes
+ * templates for calculation questions. New versions of the rest are written later, a few sets per call,
+ * and every one is reviewed by a second call before it is used.
  */
+
+/** How maths is written everywhere, so the app can display it and nothing arrives as escape codes. */
+const NOTATION = `Notation (applies to every string you write):
+- Type characters directly: √ × ÷ − ² ³ ₹ %. Never write escape sequences such as \\u221a.
+- Powers as base^exponent, with brackets when the exponent is not a single number: 7^2, (512)^(1/3), 2^(x+1).
+- Fractions as a/b, e.g. "3/4 of 160". Square roots as √900 or √(a+b).
+- Keep the question's own wording around the maths.`;
 
 const questionSchema = {
   type: 'object',
@@ -18,21 +25,27 @@ const questionSchema = {
 const templateSchema = {
   type: 'object',
   properties: {
-    text: { type: 'string', description: 'The question with each input number replaced by {name}.' },
+    text: { type: 'string', description: 'The question with each number replaced by {name}, from variables or derived values.' },
     variables: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Lowercase identifier, e.g. p, rate, speed_a.' },
+          value: { type: 'number', description: 'The number in the original question.' },
           min: { type: 'number' },
           max: { type: 'number' },
-          step: { type: 'number', description: 'Keep numbers exam-like: 100 or 500 for money, 1 or 5 for rates, 0.5 only if the original used halves.' },
+          step: { type: 'number', description: '1 for most numbers; 5, 10 or 100 only if the original is a multiple of it; 0.5 only if the original used halves.' },
         },
-        required: ['name', 'min', 'max', 'step'],
+        required: ['name', 'value', 'min', 'max', 'step'],
       },
     },
-    answerExpr: { type: 'string', description: 'Formula for the answer using the variable names.' },
+    derived: {
+      type: 'array',
+      description: 'Numbers worked out from the variables, in order. Use them when the "?" is not at the end, so the answer can be a variable.',
+      items: { type: 'object', properties: { name: { type: 'string' }, expr: { type: 'string' } }, required: ['name', 'expr'] },
+    },
+    answerExpr: { type: 'string', description: 'Formula for the answer using variable and derived names. May simply be one variable name.' },
     distractorExprs: { type: 'array', items: { type: 'string' }, description: '4 formulas for tempting wrong answers that model real mistakes.' },
     answerFormat: { type: 'string', enum: ['integer', 'decimal2'] },
     optionFormat: { type: 'string', description: 'How an option is written, with {value} for the number, e.g. "₹{value}", "{value}%", "{value} km/h", "{value}".' },
@@ -53,19 +66,20 @@ const setContentSchema = {
 export const extractionSchema = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: 'Name of the paper, e.g. "IBPS PO Prelims Mock 12".' },
+    title: { type: 'string', description: 'Name of the paper, e.g. "IBPS Clerk Prelims 2025 · 4 Oct Shift 1".' },
     sets: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           section: { type: 'string', enum: ['quant', 'reasoning', 'english'] },
-          topic: { type: 'string', description: 'e.g. Simple Interest, Data Interpretation, Seating Arrangement, Reading Comprehension, Error Spotting.' },
+          topic: { type: 'string', description: 'e.g. Simplification, Simple Interest, Tabular DI, Line Graph DI, Seating Arrangement, Reading Comprehension, Error Spotting.' },
+          difficulty: { type: 'string', enum: ['easy', 'moderate', 'hard'], description: 'As a bank exam aspirant would rate it.' },
           passage: setContentSchema.properties.passage,
           questions: { type: 'array', items: questionSchema },
-          templates: { type: 'array', items: templateSchema, description: 'Only for numeric Quant sets: one template per question, in the same order. Omit otherwise.' },
+          templates: { type: 'array', items: templateSchema, description: 'Only for calculation sets: one template per question, in the same order. Omit otherwise.' },
         },
-        required: ['section', 'topic', 'questions'],
+        required: ['section', 'topic', 'difficulty', 'questions'],
       },
     },
   },
@@ -90,29 +104,66 @@ export const variantsSchema = {
   required: ['sets'],
 };
 
+export const reviewSchema = {
+  type: 'object',
+  properties: {
+    reviews: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the candidate.' },
+          solvedAnswers: { type: 'array', items: { type: 'integer' }, description: 'Your own zero-based answer to each candidate question, in order. -1 if no option is correct or more than one is.' },
+          difficulty: { type: 'string', enum: ['easier', 'same', 'harder'], description: 'Solving effort compared with the original: steps, traps, calculation.' },
+          language: { type: 'string', enum: ['simpler', 'same', 'harder'], description: 'Vocabulary and sentence complexity compared with the original.' },
+          problems: { type: 'string', description: 'Anything that breaks the question: contradictory clues, ambiguity, wrong data. Empty if none.' },
+        },
+        required: ['id', 'solvedAnswers', 'difficulty', 'language', 'problems'],
+      },
+    },
+  },
+  required: ['reviews'],
+};
+
 export const EXTRACTION_PROMPT = `You are preparing a bank exam (IBPS / SBI PO & Clerk) mock test from the attached PDF.
 
-Extract EVERY question in the PDF, in order.
-- Classify each into section "quant" (Quantitative Aptitude / Numerical Ability), "reasoning" (Reasoning Ability) or "english" (English Language).
-- Group questions that share a passage, puzzle, seating arrangement, DI chart or common directions into ONE set, with the shared part in "passage". Every other question is a set of one.
+Extract EVERY question in the PDF, in order. Skip advertisements and pages without questions.
+- Classify each into section "quant" (Quantitative Aptitude / Numerical Ability), "reasoning" (Reasoning Ability) or "english" (English Language), give its topic, and rate its difficulty.
+- Group questions that share a passage, puzzle, seating arrangement or DI chart into ONE set, with the shared part in "passage".
+- Simplification, approximation and number-series questions are independent even under shared directions: make EACH of them its own set, with the directions in "passage".
 - Copy question text and options faithfully. Write DI tables and charts as markdown tables with the values read from the chart.
 - If the PDF has an answer key or solutions, use them. Otherwise solve the question yourself, carefully. Always write the explanation before deciding answerIndex.
 
-For Quant sets where every answer is a number computed from numbers in the question (arithmetic, percentages, SI/CI, profit & loss, ratio, averages, ages, time & work, speed & distance, mensuration, probability, etc.) ALSO write "templates", one per question in order:
-- Replace each input number in the text with a {variable}. Choose ranges around the original values so new versions feel the same; the original values must lie inside the ranges.
-- answerExpr computes the answer from the variables. Allowed: numbers, variable names, + - * / ^ %, parentheses, and the functions sqrt, cbrt, abs, round, floor, ceil, min, max, pow, ncr, npr, fact. Nothing else.
-- distractorExprs: 4 formulas giving tempting wrong answers that model real mistakes (wrong base for a percentage, simple instead of compound interest, adding instead of subtracting, off by one year, and so on).
-- answerFormat "integer" when the original answer is whole, else "decimal2". Prefer ranges and steps that make the answer come out whole.
-- Do NOT write templates for DI sets, number series, quadratic-equation comparisons, approximation/simplification with many numbers, data sufficiency, or any question whose answer isn't a single number. Those are rewritten later.
+Write "templates" (one per question, in order) for every Quant set whose answers are numbers calculated from numbers in the question: simplification, arithmetic, percentages, SI/CI, profit & loss, ratio, mixtures, partnership, averages, ages, time & work, speed & distance, boats, mensuration, probability and similar.
+- Replace each number in the text with a {variable}, and record the original number as "value". Ranges must keep the same number of digits as the original (784 → 700–899; 1297 → 1100–1899).
+- When the "?" is not at the end (e.g. "(3080 + 6160) ÷ ? = 330" or "24 × ? = 225% of 2400"), make the answer a variable and put the other numbers in "derived", e.g. variables a, b, ans and derived c = (a + b) / ans, with answerExpr "ans".
+- answerExpr and derived formulas may use numbers, names, + - * / ^ %, parentheses and sqrt, cbrt, abs, round, floor, ceil, min, max, pow, ncr, npr, fact. Nothing else.
+- distractorExprs: 4 formulas giving tempting wrong answers close to the right one, modelling real mistakes.
+- answerFormat "integer" when the original answer is whole, else "decimal2".
+- Do NOT write templates for DI sets, number series, quadratic-equation comparisons, data sufficiency, or questions whose answer isn't a single number. Those get rewritten versions later.
+
+${NOTATION}
 
 Return JSON only, matching the schema.`;
 
-export const VARIANTS_PROMPT = (count: number) => `You write fresh practice versions of bank exam (IBPS / SBI PO & Clerk) questions.
+export const VARIANTS_PROMPT = (count: number) => `You write fresh practice versions of bank exam (IBPS / SBI PO & Clerk) questions that feel exactly like the real exam.
 
 For EACH input set, write ${count} new versions of the whole set ("variants"). Each version must:
-- Test exactly the same concept, question type, number of questions and difficulty as the original.
-- Change the surface completely: new names, numbers, words, arrangements and options. Reasoning puzzles and seating arrangements need a new, fully consistent arrangement; syllogisms need new terms; coding-decoding needs a new code; RC and cloze need a new passage of similar length and tone; error spotting and fillers need new sentences; DI needs new data.
-- Have exactly ONE correct option per question and the same number of options as the original (usually 5). Solve each new question yourself and write the explanation before choosing answerIndex. Double-check puzzles against every clue.
-- Keep the shared stem in "passage" (empty if the original has none).
+- Test the same concept and question type, with the same number of questions and options, in the same order.
+- Match the original's difficulty exactly (the input gives its rating): the same number of solving steps, the same traps, the same calculation load. Never make it easier.
+- Match the original's length and wording level: the passage and each question within about 10% of the original's word count (given in the input), with the same vocabulary level and sentence complexity.
+- Change the surface completely: new names, numbers, words, arrangements and options. Puzzles and seating arrangements need a new, fully consistent arrangement; syllogisms new terms; coding-decoding a new code; RC and cloze a new passage on a different subject of similar tone; error spotting and fillers new sentences; DI new data with the same chart type and number of rows.
+- Have exactly ONE correct option per question. Solve each question yourself and write the explanation before choosing answerIndex. Check puzzles against every clue.
+
+${NOTATION}
 
 Return JSON only, matching the schema, with each set's "id" copied from the input.`;
+
+export const REVIEW_PROMPT = `You are a strict reviewer for bank exam (IBPS / SBI) practice questions. Each input has an "original" set and a "candidate" rewrite.
+
+For each candidate:
+1. Solve every candidate question yourself, from scratch, without trusting any answer it may suggest. Report your answer index for each, or -1 if no option or more than one option is correct.
+2. Compare the candidate with the original: is it easier, the same or harder to solve (steps, traps, calculation)? Is its language simpler, the same or harder?
+3. List anything broken: contradictory or missing clues, ambiguous wording, data that doesn't add up. Leave empty if none.
+
+Return JSON only, matching the schema, with each candidate's "id" copied from the input.`;

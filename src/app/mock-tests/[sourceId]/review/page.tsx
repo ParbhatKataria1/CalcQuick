@@ -51,7 +51,7 @@ function SetReview({ set, number }: { set: QuestionSet; number: number }) {
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-        <div className="font-bold">{number}. {set.topic} <span className="ml-2 text-xs font-medium text-slate-500">{set.original.questions.length} {set.original.questions.length === 1 ? 'question' : 'questions'}</span></div>
+        <div className="font-bold">{number}. {set.topic} <span className="ml-2 text-xs font-medium text-slate-500">{set.original.questions.length} {set.original.questions.length === 1 ? 'question' : 'questions'}{set.difficulty && ` · ${set.difficulty}`}</span></div>
         <div className="flex items-center gap-2 text-xs font-semibold">
           {templated ? (
             <>
@@ -68,7 +68,7 @@ function SetReview({ set, number }: { set: QuestionSet; number: number }) {
       </div>
       <div className="grid divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0 dark:divide-slate-800">
         <ContentColumn title="Original (PDF)" content={set.original} />
-        {sample ? <ContentColumn title={templated ? 'Sample with new numbers' : `Version ${variantIndex + 1}`} content={sample} /> : <div className="p-5 text-sm text-slate-500">No new versions yet. The original is used until you generate more.</div>}
+        {sample ? <ContentColumn title={templated ? 'Sample with new numbers (same size and difficulty)' : `Version ${variantIndex + 1} · passed length and answer review`} content={sample} /> : <div className="p-5 text-sm text-slate-500">No new versions yet. The original is used until you generate more.</div>}
       </div>
     </Card>
   );

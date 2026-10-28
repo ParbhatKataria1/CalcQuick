@@ -1,11 +1,11 @@
 import { requireUser } from '@/lib/server/auth';
-import { extractSets, writeVariants } from '@/lib/gemini';
+import { extractSets } from '@/lib/gemini';
 import { HttpError, readJson, route } from '@/lib/server/http';
 import { MAX_PDF_BYTES, takeUploadedPdf, uploadConfig } from '@/lib/server/pdf-upload';
 import { listSources, saveSource } from '@/lib/server/store';
 import { uid } from '@/lib/mock-generator';
 
-// Reading a full paper and rewriting its reasoning and English sets can take a few minutes.
+// Reading a full paper can take a few minutes.
 export const maxDuration = 300;
 
 export const GET = route(async () => {
@@ -29,7 +29,7 @@ async function receivePdf(request: Request, userId: string): Promise<{ pdf: Buff
   return { pdf: Buffer.from(await file.arrayBuffer()), fileName: file.name };
 }
 
-/** Reads an uploaded PDF with Gemini and saves it as a paper: Quant templates plus rewritten versions of everything else. */
+/** Reads an uploaded PDF with Gemini and saves it as a paper, with templates for its calculation questions. */
 export const POST = route(async (request: Request) => {
   const user = await requireUser();
   const { pdf, fileName } = await receivePdf(request, user.id);
@@ -37,15 +37,9 @@ export const POST = route(async (request: Request) => {
   // Every PDF file starts with this signature.
   if (pdf.subarray(0, 5).toString('latin1') !== '%PDF-') throw new HttpError('This file is not a valid PDF.', 415);
 
+  // New versions are written afterwards from the paper page, a few sets per request, so this request stays short.
   const { title, sets } = await extractSets(pdf);
-  // The questions are already read, so a failed rewrite only costs fresh versions; they can be generated again later.
-  let warning: string | undefined;
-  const variants = await writeVariants(sets.filter((set) => !set.templates)).catch((error: unknown) => {
-    warning = `Questions were read, but new versions couldn't be written yet (${error instanceof Error ? error.message : 'unknown error'}). Use "Generate more with AI".`;
-    return {} as Record<string, never>;
-  });
-  for (const set of sets) set.variants = variants[set.id] ?? [];
 
   const source = await saveSource(user.id, { id: uid('src'), name: title || fileName.replace(/\.pdf$/i, ''), fileName, createdAt: Date.now(), sets });
-  return Response.json({ id: source.id, warning }, { status: 201 });
+  return Response.json({ id: source.id }, { status: 201 });
 });

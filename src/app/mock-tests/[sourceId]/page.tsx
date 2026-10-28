@@ -1,30 +1,29 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { AlertTriangle, ArrowLeft, Eye, Loader2, Pencil, Play, Sparkles } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Eye, Loader2, Pencil, Play, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { mockApi } from '@/lib/mock-api';
-import { sectionCounts, type SectionPlan } from '@/lib/mock-generator';
+import { isTemplated, paperPattern, setsNeedingVersions } from '@/lib/mock-generator';
 import { useLoad } from '@/lib/use-load';
 import { cn } from '@/lib/utils';
-import { SECTIONS, sectionLabel, type MockSource, type MockTest, type Section } from '@/types/mock-test';
-
-type Plan = Record<Section, { enabled: boolean; questions: number; minutes: number }>;
+import { sectionLabel, type MockSource, type MockTest, type Section } from '@/types/mock-test';
 
 /** Prelims pattern shared by IBPS and SBI PO & Clerk: English 30, Quant 35, Reasoning 35, 20 minutes each. */
-const PRELIMS: Record<Section, { questions: number; minutes: number }> = {
-  english: { questions: 30, minutes: 20 },
-  quant: { questions: 35, minutes: 20 },
-  reasoning: { questions: 35, minutes: 20 },
-};
+const PRELIMS_QUESTIONS: Record<Section, number> = { english: 30, quant: 35, reasoning: 35 };
+const PRELIMS_MINUTES = 20;
+/** Prelims pace: 20 minutes for 35 questions is about 34 seconds each. */
+const SECONDS_PER_QUESTION = 34;
+
+const defaultMinutes = (section: Section, questions: number) =>
+  questions === PRELIMS_QUESTIONS[section] ? PRELIMS_MINUTES : Math.max(1, Math.round((questions * SECONDS_PER_QUESTION) / 60));
 
 export default function MockSourcePage({ params }: { params: Promise<{ sourceId: string }> }) {
   const { sourceId } = use(params);
   const { data: source, error, loading, reload } = useLoad(() => mockApi.getSource(sourceId), sourceId);
-  const warning = useSearchParams().get('warning');
 
   if (loading && !source) return <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" /> Loading paper…</div>;
   if (!source) {
@@ -36,56 +35,89 @@ export default function MockSourcePage({ params }: { params: Promise<{ sourceId:
       </Card>
     );
   }
-  return <SourceSetup source={source} warning={warning} onChanged={reload} />;
+  return <SourceSetup source={source} onChanged={reload} />;
 }
 
-function SourceSetup({ source, warning, onChanged }: { source: MockSource; warning: string | null; onChanged: () => void }) {
-  const router = useRouter();
-  const counts = useMemo(() => sectionCounts(source), [source]);
-  const presetFor = (pattern: 'prelims' | 'full'): Plan => Object.fromEntries(SECTIONS.map((section) => {
-    const available = counts[section].questions;
-    const questions = pattern === 'prelims' ? Math.min(PRELIMS[section].questions, available) : available;
-    // About 34 seconds a question, the prelims pace, rounded to whole minutes.
-    const minutes = pattern === 'prelims' && questions === PRELIMS[section].questions ? PRELIMS[section].minutes : Math.max(1, Math.round((questions * 34) / 60));
-    return [section, { enabled: available > 0, questions, minutes }];
-  })) as Plan;
+type Progress = { done: number; total: number; added: number; rejected: number; failed: string[] };
 
-  const [plan, setPlan] = useState<Plan>(() => presetFor('prelims'));
+function SourceSetup({ source, onChanged }: { source: MockSource; onChanged: () => void }) {
+  const router = useRouter();
+  const pattern = useMemo(() => paperPattern(source), [source]);
+  const [minutes, setMinutes] = useState<Partial<Record<Section, number>>>(() => Object.fromEntries(pattern.map(({ section, questions }) => [section, defaultMinutes(section, questions)])));
   const [timing, setTiming] = useState<MockTest['timing']>('sectional');
   const [starting, setStarting] = useState(false);
-  const [generating, setGenerating] = useState<Section | null>(null);
-  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(warning ? { tone: 'info', text: warning } : null);
+  const [writing, setWriting] = useState<Progress | null>(null);
+  const [moreFor, setMoreFor] = useState<Section | null>(null);
+  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+  const stopRef = useRef(false);
+  const autoStartedRef = useRef(false);
 
-  const chosen = SECTIONS.filter((section) => plan[section].enabled && plan[section].questions > 0);
-  const totalQuestions = chosen.reduce((sum, section) => sum + plan[section].questions, 0);
-  const totalMinutes = chosen.reduce((sum, section) => sum + plan[section].minutes, 0);
+  const needing = setsNeedingVersions(source);
+  const totalQuestions = pattern.reduce((sum, item) => sum + item.questions, 0);
+  const totalMinutes = pattern.reduce((sum, item) => sum + (minutes[item.section] ?? 0), 0);
 
-  const update = (section: Section, patch: Partial<Plan[Section]>) => setPlan((current) => ({ ...current, [section]: { ...current[section], ...patch } }));
+  /** Writes and reviews versions a few sets per request until every set has a fresh one. */
+  const writeVersions = useCallback(async () => {
+    stopRef.current = false;
+    const total = setsNeedingVersions(source).length;
+    let progress: Progress = { done: 0, total, added: 0, rejected: 0, failed: [] };
+    setWriting(progress);
+    setMessage(null);
+    try {
+      for (;;) {
+        const result = await mockApi.generateVariants(source.id, { skip: progress.failed });
+        progress = {
+          done: total - result.remaining,
+          total,
+          added: progress.added + result.added,
+          rejected: progress.rejected + result.rejected.length,
+          failed: [...progress.failed, ...result.failedSetIds],
+        };
+        setWriting(progress);
+        if (!result.remaining || stopRef.current) break;
+      }
+      setMessage({
+        tone: progress.failed.length ? 'error' : 'info',
+        text: `${progress.added} checked ${progress.added === 1 ? 'version' : 'versions'} added; ${progress.rejected} rejected for a wrong answer key, an easier level or a different length.${progress.failed.length ? ` ${progress.failed.length} ${progress.failed.length === 1 ? 'set' : 'sets'} got none — try again later.` : ''}`,
+      });
+    } catch (caught) {
+      setMessage({ tone: 'error', text: `${caught instanceof Error ? caught.message : String(caught)} Versions written so far are saved.` });
+    } finally {
+      setWriting(null);
+      onChanged();
+    }
+  }, [onChanged, source]);
+
+  // A freshly uploaded paper has no versions yet, so start writing them straight away.
+  useEffect(() => {
+    if (autoStartedRef.current || !needing.length) return;
+    autoStartedRef.current = true;
+    void writeVersions();
+  }, [needing.length, writeVersions]);
+
+  const generateMore = async (section: Section) => {
+    setMoreFor(section);
+    setMessage(null);
+    try {
+      const { added, rejected } = await mockApi.generateVariants(source.id, { section });
+      setMessage({ tone: 'info', text: `Added ${added} checked ${added === 1 ? 'version' : 'versions'} to ${sectionLabel[section]}${rejected.length ? `; ${rejected.length} rejected` : ''}.` });
+      onChanged();
+    } catch (caught) {
+      setMessage({ tone: 'error', text: caught instanceof Error ? caught.message : String(caught) });
+    } finally {
+      setMoreFor(null);
+    }
+  };
 
   const start = async () => {
     setStarting(true);
     setMessage(null);
     try {
-      const sections: SectionPlan[] = chosen.map((section) => ({ section, questions: plan[section].questions, durationSeconds: plan[section].minutes * 60 }));
-      const { id } = await mockApi.createTest(source.id, timing, sections);
+      const { id } = await mockApi.createTest(source.id, timing, minutes);
       router.push(`/mock-tests/test/${id}/instructions`);
     } catch (caught) {
       setMessage({ tone: 'error', text: caught instanceof Error ? caught.message : String(caught) });
       setStarting(false);
-    }
-  };
-
-  const generateMore = async (section: Section) => {
-    setGenerating(section);
-    setMessage(null);
-    try {
-      const { added } = await mockApi.generateVariants(source.id, section);
-      setMessage({ tone: 'info', text: `Added ${added} new ${added === 1 ? 'version' : 'versions'} to ${sectionLabel[section]}.` });
-      onChanged();
-    } catch (caught) {
-      setMessage({ tone: 'error', text: caught instanceof Error ? caught.message : String(caught) });
-    } finally {
-      setGenerating(null);
     }
   };
 
@@ -105,89 +137,81 @@ function SourceSetup({ source, warning, onChanged }: { source: MockSource; warni
           <h1 className="text-3xl font-bold tracking-tight">{source.name}</h1>
           <button onClick={rename} aria-label="Rename paper" className="mt-1.5 rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"><Pencil className="size-4" /></button>
         </div>
-        <p className="mt-3 max-w-2xl leading-7 text-slate-300">Quant questions get fresh numbers every time. Reasoning and English use AI-written versions, unseen ones first.</p>
+        <p className="mt-3 max-w-2xl leading-7 text-slate-300">Every test follows this paper exactly: the same topics, question counts and order. Calculation questions get fresh numbers of the same size and difficulty; the rest use AI versions that passed a length check and an independent review of their answers and level.</p>
         <Link href={`/mock-tests/${source.id}/review`} className="mt-5 inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-white/10"><Eye className="size-4" /> Review questions and versions</Link>
       </div>
 
+      {writing && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 font-semibold"><Loader2 className="size-4 animate-spin text-indigo-600" /> Writing and checking new versions… {writing.done}/{writing.total} sets</div>
+            <Button variant="outline" size="sm" onClick={() => { stopRef.current = true; }}>Stop after this batch</Button>
+          </div>
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${writing.total ? (writing.done / writing.total) * 100 : 0}%` }} /></div>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{writing.added} accepted · {writing.rejected} rejected so far. Each batch takes about a minute; you can start a test meanwhile, but sets without a version yet will repeat earlier ones.</p>
+        </Card>
+      )}
+
       {message && (
         <div className={cn('flex items-start gap-2 rounded-xl px-4 py-3 text-sm', message.tone === 'error' ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' : 'bg-indigo-50 text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200')}>
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {message.text}
+          {message.tone === 'error' ? <AlertTriangle className="mt-0.5 size-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0" />} {message.text}
         </div>
       )}
 
-      <section className="grid gap-3 md:grid-cols-3">
-        {SECTIONS.map((section) => {
-          const count = counts[section];
-          const staticQuestions = count.questions - count.templated;
-          return (
-            <Card key={section} className="p-5">
-              <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{sectionLabel[section]}</div>
-              <div className="mt-2 text-2xl font-bold">{count.questions} <span className="text-sm font-medium text-slate-400">questions in paper</span></div>
-              <ul className="mt-3 space-y-1 text-sm text-slate-600 dark:text-slate-300">
-                {count.templated > 0 && <li>{count.templated} with endless fresh numbers</li>}
-                {staticQuestions > 0 && <li>{staticQuestions} in {count.sets - count.templatedSets} {count.sets - count.templatedSets === 1 ? 'set' : 'sets'} · <span className={cn('font-semibold', count.unseen === 0 && 'text-amber-600')}>{count.unseen} unseen {count.unseen === 1 ? 'version' : 'versions'}</span></li>}
-              </ul>
-              {staticQuestions > 0 && (
-                <Button variant="outline" size="sm" className="mt-4" disabled={generating !== null} onClick={() => generateMore(section)}>
-                  {generating === section ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} {generating === section ? 'Writing…' : 'Generate more with AI'}
-                </Button>
-              )}
-            </Card>
-          );
-        })}
-      </section>
-
-      <Card className="p-5 md:p-7">
-        <div className="flex flex-wrap items-end justify-between gap-3">
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-100 p-5 dark:border-slate-800">
           <div>
-            <h2 className="text-xl font-bold">Test pattern</h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Puzzles and passages stay whole, so a section can come out a few questions short.</p>
+            <h2 className="text-xl font-bold">Paper pattern</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{totalQuestions} questions · {totalMinutes} minutes · +1 / −0.25. Topics are listed in paper order.</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPlan(presetFor('prelims'))}>IBPS / SBI Prelims</Button>
-            <Button variant="outline" size="sm" onClick={() => setPlan(presetFor('full'))}>Whole paper</Button>
-          </div>
+          {!writing && needing.length > 0 && <Button variant="outline" size="sm" onClick={() => void writeVersions()}><Sparkles className="size-4" /> Write versions for {needing.length} {needing.length === 1 ? 'set' : 'sets'}</Button>}
         </div>
-
-        <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-          {SECTIONS.map((section) => {
-            const available = counts[section].questions;
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          {pattern.map(({ section, sets, topics, questions }) => {
+            const templated = sets.filter(isTemplated).reduce((sum, set) => sum + set.original.questions.length, 0);
+            const stale = sets.filter((set) => !isTemplated(set) && set.variants.length <= set.usedVariants.length);
+            const staleQuestions = stale.reduce((sum, set) => sum + set.original.questions.length, 0);
             return (
-              <div key={section} className={cn('grid items-center gap-4 p-4 sm:grid-cols-[1fr_auto_auto]', !available && 'opacity-50')}>
-                <label className="flex items-center gap-3 font-semibold">
-                  <input type="checkbox" className="size-4 accent-indigo-600" disabled={!available} checked={plan[section].enabled} onChange={(event) => update(section, { enabled: event.target.checked })} />
-                  {sectionLabel[section]}
+              <div key={section} className="grid gap-4 p-5 md:grid-cols-[1fr_auto]">
+                <div>
+                  <div className="font-bold">{sectionLabel[section]} <span className="font-medium text-slate-400">· {questions} {questions === 1 ? 'question' : 'questions'}</span></div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {topics.map((item, index) => <span key={`${item.topic}-${index}`} className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{item.topic} × {item.questions}</span>)}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                    {templated > 0 && <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300"><ShieldCheck className="size-3.5" /> {templated} with fresh numbers of the same difficulty</span>}
+                    {questions - templated > 0 && (staleQuestions
+                      ? <span className="text-amber-700 dark:text-amber-300">{staleQuestions} would repeat an earlier version</span>
+                      : <span className="text-slate-500">{questions - templated} from unseen checked versions</span>)}
+                  </div>
+                  {questions - templated > 0 && (
+                    <button type="button" disabled={Boolean(writing) || moreFor !== null} onClick={() => generateMore(section)} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 disabled:opacity-50 dark:text-indigo-300">
+                      {moreFor === section ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} More versions for this section
+                    </button>
+                  )}
+                </div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  Minutes
+                  <input type="number" min={1} max={240} value={minutes[section] ?? ''} onChange={(event) => setMinutes((current) => ({ ...current, [section]: Math.min(240, Math.max(1, Number(event.target.value) || 1)) }))} className="mt-1 block h-10 w-24 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
                 </label>
-                <NumberField label={`Questions (max ${available})`} value={plan[section].questions} min={1} max={Math.max(1, available)} disabled={!plan[section].enabled} onChange={(questions) => update(section, { questions })} />
-                <NumberField label="Minutes" value={plan[section].minutes} min={1} max={180} disabled={!plan[section].enabled} onChange={(minutes) => update(section, { minutes })} />
               </div>
             );
           })}
         </div>
-
-        <div className="mt-5">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Timing</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <TimingOption active={timing === 'sectional'} onClick={() => setTiming('sectional')} title="Sectional (as in prelims)" detail="Each section has its own clock and locks when time runs out." />
-            <TimingOption active={timing === 'composite'} onClick={() => setTiming('composite')} title="Composite" detail={`One ${totalMinutes}-minute clock; move between sections freely.`} />
+        <div className="space-y-5 border-t border-slate-100 p-5 dark:border-slate-800">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Timing</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <TimingOption active={timing === 'sectional'} onClick={() => setTiming('sectional')} title="Sectional (as in prelims)" detail="Each section has its own clock and locks when time runs out." />
+              <TimingOption active={timing === 'composite'} onClick={() => setTiming('composite')} title="Composite" detail={`One ${totalMinutes}-minute clock; move between sections freely.`} />
+            </div>
           </div>
-        </div>
-
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm text-slate-500 dark:text-slate-400">{totalQuestions} questions · {totalMinutes} minutes · +1 / −0.25</div>
-          <Button size="lg" disabled={!chosen.length || starting} onClick={start}>{starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4 fill-current" />} Generate &amp; start</Button>
+          <div className="flex justify-end">
+            <Button size="lg" disabled={starting} onClick={start}>{starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4 fill-current" />} Generate &amp; start</Button>
+          </div>
         </div>
       </Card>
     </div>
-  );
-}
-
-function NumberField({ label, value, min, max, disabled, onChange }: { label: string; value: number; min: number; max: number; disabled?: boolean; onChange: (value: number) => void }) {
-  return (
-    <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-      {label}
-      <input type="number" value={value} min={min} max={max} disabled={disabled} onChange={(event) => onChange(Math.min(max, Math.max(min, Number(event.target.value) || min)))} className="mt-1 block h-10 w-28 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-    </label>
   );
 }
 
