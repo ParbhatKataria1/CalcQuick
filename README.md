@@ -67,7 +67,7 @@ How it works:
 
 - The PDF is sent to Gemini once (`src/app/api/mock-tests/parse/route.ts`). Numeric Quant questions come back as templates — variables with ranges plus an answer formula — so every test gets fresh numbers locally, with no further API calls (`src/lib/mock-generator.ts`, evaluated safely by `src/lib/expression.ts`).
 - Reasoning, English and Quant that can't be templated (DI, series, puzzles…) get AI-rewritten versions in smaller follow-up calls. Each test prefers versions you haven't seen; **Generate more with AI** adds more.
-- Papers, tests and attempts are saved to the user's account. Deleting a paper also deletes its tests and attempts. PDFs can be up to 4 MB (Vercel's request size limit).
+- Papers, tests and attempts are saved to the user's account. Deleting a paper also deletes its tests and attempts. PDFs can be up to 8 MB. Vercel functions only accept 4.5 MB per request, so on Vercel the browser uploads the PDF to **Vercel Blob** first; the server reads it from there and deletes it. Connect a Blob store (Storage → Blob, choose *Private*) to the project for PDFs over 4 MB.
 - The exam screen copies the IBPS / SBI interface: section tabs, sectional or composite timing, question palette with the official status legend, Save & Next, Mark for Review & Next, Clear Response and the pre-submit summary. Marking is +1 / −0.25. Progress autosaves, so a reload resumes the same question.
 
 ## Production validation

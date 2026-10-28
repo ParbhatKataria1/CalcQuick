@@ -6,13 +6,12 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, ArrowRight, FileText, Loader2, ServerCrash, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { useAuth } from '@/context/auth-context';
 import { formatBytes, mockApi } from '@/lib/mock-api';
 import { formatScore } from '@/lib/mock-scoring';
 import { useLoad } from '@/lib/use-load';
 import { cn } from '@/lib/utils';
 import { SECTIONS, sectionLabel, type AttemptSummary, type SourceSummary } from '@/types/mock-test';
-
-const MAX_PDF_BYTES = 4 * 1024 * 1024;
 
 export default function MockTestsPage() {
   const sources = useLoad(() => mockApi.listSources(), 'sources');
@@ -66,7 +65,9 @@ function UploadCard() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const { user } = useAuth();
   const [busy, setBusy] = useState<{ fileName: string; startedAt: number } | null>(null);
+  const [uploaded, setUploaded] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,15 +83,12 @@ function UploadCard() {
       setError('Choose a PDF file.');
       return;
     }
-    if (file.size > MAX_PDF_BYTES) {
-      setError('The PDF is larger than 4 MB. Compress it or split it into parts.');
-      return;
-    }
     setError(null);
     setElapsed(0);
+    setUploaded(0);
     setBusy({ fileName: file.name, startedAt: Date.now() });
     try {
-      const { id, warning } = await mockApi.uploadPdf(file);
+      const { id, warning } = await mockApi.uploadPdf(file, user!.id, setUploaded);
       router.push(`/mock-tests/${id}${warning ? `?warning=${encodeURIComponent(warning)}` : ''}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -115,14 +113,23 @@ function UploadCard() {
         {busy ? (
           <>
             <Loader2 className="size-9 animate-spin text-indigo-600" />
-            <div className="mt-4 font-bold">Reading {busy.fileName}</div>
-            <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Gemini is extracting the questions, building Quant templates and writing new versions of the Reasoning and English sets. A full paper takes 1–4 minutes. ({elapsed}s)</p>
+            {uploaded < 100 ? (
+              <>
+                <div className="mt-4 font-bold">Uploading {busy.fileName}… {Math.round(uploaded)}%</div>
+                <div className="mt-3 h-1.5 w-64 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${uploaded}%` }} /></div>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 font-bold">Reading {busy.fileName}</div>
+                <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Gemini is extracting the questions, building Quant templates and writing new versions of the Reasoning and English sets. A full paper takes 1–4 minutes. ({elapsed}s)</p>
+              </>
+            )}
           </>
         ) : (
           <>
             <div className="flex size-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300"><Upload className="size-6" /></div>
             <div className="mt-4 font-bold">Drop a mock test PDF here</div>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Text-based PDFs up to 4 MB. An answer key in the PDF makes the answers more reliable.</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Text-based PDFs up to 8 MB. An answer key in the PDF makes the answers more reliable.</p>
             <Button className="mt-5" onClick={() => inputRef.current?.click()}><Upload className="size-4" /> Choose PDF</Button>
             <input ref={inputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ''; }} />
           </>

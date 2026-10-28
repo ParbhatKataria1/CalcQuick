@@ -12,6 +12,7 @@
     "@google/genai": "^2.31.0",
     "@tailwindcss/postcss": "^4.1.12",
     "@upstash/redis": "^1.40.0",
+    "@vercel/blob": "^2.8.2",
     "lucide-react": "^0.468.0",
     "next": "^16.2.12",
     "react": "^19.1.1",
