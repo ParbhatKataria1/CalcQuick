@@ -1,23 +1,19 @@
 'use client';
 
-import { use, useState, useSyncExternalStore } from 'react';
+import { use, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import { ExamHeader, readCandidateName, saveCandidateName } from '@/components/exam/exam-header';
+import { ExamHeader } from '@/components/exam/exam-header';
 import { StatusIcon, statusLabel } from '@/components/exam/question-palette';
+import { useAuth } from '@/context/auth-context';
 import { mockApi } from '@/lib/mock-api';
-import { uid } from '@/lib/mock-generator';
-import { newResponses } from '@/lib/mock-scoring';
 import { useLoad } from '@/lib/use-load';
 import { MARKS_WRONG, sectionLabel, type MockAttempt, type MockTest } from '@/types/mock-test';
-
-const subscribeNever = () => () => {};
 
 export default function InstructionsPage({ params }: { params: Promise<{ testId: string }> }) {
   const { testId } = use(params);
   const { data, error } = useLoad(async () => ({ test: await mockApi.getTest(testId), attempt: await mockApi.findAttemptForTest(testId) }), testId);
-  const storedName = useSyncExternalStore(subscribeNever, readCandidateName, () => 'Candidate');
 
   if (!data) {
     return (
@@ -26,39 +22,22 @@ export default function InstructionsPage({ params }: { params: Promise<{ testId:
       </div>
     );
   }
-  return <Instructions test={data.test} attempt={data.attempt} storedName={storedName} />;
+  return <Instructions test={data.test} attempt={data.attempt} />;
 }
 
-function Instructions({ test, attempt, storedName }: { test: MockTest; attempt: MockAttempt | null; storedName: string }) {
+function Instructions({ test, attempt }: { test: MockTest; attempt: MockAttempt | null }) {
   const router = useRouter();
-  const [name, setName] = useState(storedName === 'Candidate' ? '' : storedName);
+  const name = useAuth().user?.name ?? 'Candidate';
   const [agreed, setAgreed] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const totalQuestions = test.sections.reduce((sum, section) => sum + section.questions.length, 0);
-  const totalSeconds = test.sections.reduce((sum, section) => sum + section.durationSeconds, 0);
-  const totalMinutes = Math.round(totalSeconds / 60);
+  const totalMinutes = Math.round(test.sections.reduce((sum, section) => sum + section.durationSeconds, 0) / 60);
 
   const begin = async () => {
     setStarting(true);
-    saveCandidateName(name);
     try {
-      if (!attempt) {
-        await mockApi.createAttempt({
-          id: uid('attempt'),
-          testId: test.id,
-          sourceId: test.sourceId,
-          testName: test.name,
-          startedAt: Date.now(),
-          endedAt: null,
-          responses: newResponses(test),
-          remainingSeconds: test.timing === 'sectional' ? test.sections.map((section) => section.durationSeconds) : [totalSeconds],
-          currentSection: 0,
-          sectionScores: [],
-          score: 0,
-          maxScore: totalQuestions,
-        });
-      }
+      if (!attempt) await mockApi.startAttempt(test.id);
       router.replace(`/mock-tests/test/${test.id}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -68,7 +47,7 @@ function Instructions({ test, attempt, storedName }: { test: MockTest; attempt: 
 
   return (
     <div className="flex min-h-screen flex-col bg-white text-[#222]">
-      <ExamHeader title={test.name} candidate={name || 'Candidate'} />
+      <ExamHeader title={test.name} candidate={name} />
       <div className="border-b border-[#c9d6e8] bg-[#e8f0fa] px-4 py-2 text-sm font-bold text-[#1f4e8c]">Instructions</div>
       <main className="mx-auto w-full max-w-4xl flex-1 space-y-5 px-4 py-6 text-sm leading-6">
         <h1 className="text-center text-lg font-bold">Please read the instructions carefully</h1>
@@ -113,10 +92,6 @@ function Instructions({ test, attempt, storedName }: { test: MockTest; attempt: 
         </section>
 
         <section className="space-y-3 border-t border-[#c9d6e8] pt-4">
-          <label className="block">
-            <span className="font-semibold">Your name (shown on the exam screen)</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Candidate" className="mt-1 block h-9 w-full max-w-xs rounded border border-[#b9bec7] px-3" />
-          </label>
           <label className="flex items-start gap-2">
             <input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} className="mt-1 size-4 accent-[#1f4e8c]" />
             <span>I have read and understood the instructions. I agree that the test will be submitted automatically when the time is over.</span>

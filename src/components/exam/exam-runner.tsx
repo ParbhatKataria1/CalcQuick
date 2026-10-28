@@ -1,14 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Clock3, Grid3X3, Lock, X } from 'lucide-react';
-import { ExamHeader, readCandidateName } from '@/components/exam/exam-header';
+import { ExamHeader } from '@/components/exam/exam-header';
 import { PaletteGrid, StatusLegend } from '@/components/exam/question-palette';
 import { RichText } from '@/components/exam/rich-text';
 import { SubmitSummary } from '@/components/exam/submit-summary';
+import { useAuth } from '@/context/auth-context';
 import { mockApi } from '@/lib/mock-api';
-import { formatClock, scoreAttempt } from '@/lib/mock-scoring';
+import { formatClock } from '@/lib/mock-scoring';
 import { cn } from '@/lib/utils';
 import { sectionLabel, type MockAttempt, type MockTest, type QuestionResponse, type QuestionStatus } from '@/types/mock-test';
 
@@ -16,7 +17,6 @@ type Position = { section: number; question: number };
 
 const AUTOSAVE_MS = 5000;
 const WARN_BELOW_SECONDS = 60;
-const subscribeNever = () => () => {};
 
 const markVisited = (responses: QuestionResponse[][], { section, question }: Position) =>
   responses.map((items, sectionIndex) => items.map((response, index) =>
@@ -24,7 +24,7 @@ const markVisited = (responses: QuestionResponse[][], { section, question }: Pos
 
 export function ExamRunner({ test, attempt, initialPosition }: { test: MockTest; attempt: MockAttempt; initialPosition: Position }) {
   const router = useRouter();
-  const candidate = useSyncExternalStore(subscribeNever, readCandidateName, () => 'Candidate');
+  const candidate = useAuth().user?.name ?? 'Candidate';
   const sectional = test.timing === 'sectional';
 
   // With sectional timing only the attempt's current section is open; earlier ones are locked.
@@ -110,14 +110,15 @@ export function ExamRunner({ test, attempt, initialPosition }: { test: MockTest;
     const finalResponses = latest.map((items, sectionIndex) => items.map((response, index) =>
       sectionIndex === at.section && index === at.question ? { ...response, timeMs: response.timeMs + spent } : response));
     try {
-      await mockApi.updateAttempt(attempt.id, { responses: finalResponses, remainingSeconds: remainingNow(), endedAt: Date.now(), ...scoreAttempt(test, finalResponses) });
+      // The server works out the score.
+      await mockApi.saveAttempt(attempt.id, { responses: finalResponses, remainingSeconds: remainingNow(), submit: true });
       router.replace(`/mock-tests/result/${attempt.id}`);
     } catch (caught) {
       submittedRef.current = false;
       setSubmitting(false);
       setError(`Could not submit: ${caught instanceof Error ? caught.message : String(caught)} Your answers are kept; try again.`);
     }
-  }, [attempt.id, remainingNow, router, test]);
+  }, [attempt.id, remainingNow, router]);
 
   /** Locks the open section and starts the next one's clock (sectional timing only). */
   const startNextSection = () => {
@@ -157,7 +158,7 @@ export function ExamRunner({ test, attempt, initialPosition }: { test: MockTest;
       const serialized = JSON.stringify(snapshot);
       if (serialized === lastSaved) return;
       lastSaved = serialized;
-      mockApi.updateAttempt(attempt.id, snapshot).catch(() => { lastSaved = ''; });
+      mockApi.saveAttempt(attempt.id, snapshot).catch(() => { lastSaved = ''; });
     };
     const timer = window.setInterval(save, AUTOSAVE_MS);
     const onHide = () => { if (document.visibilityState === 'hidden') save(); };

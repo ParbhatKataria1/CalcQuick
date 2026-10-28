@@ -2,20 +2,8 @@ import 'server-only';
 import { ApiError, GoogleGenAI, type PartUnion } from '@google/genai';
 import { EXTRACTION_PROMPT, VARIANTS_PROMPT, extractionSchema, variantsSchema } from '@/lib/gemini-prompt';
 import { templatesWork, uid } from '@/lib/mock-generator';
+import { HttpError } from '@/lib/server/http';
 import { SECTIONS, type QuestionSet, type QuestionTemplate, type Section, type SetContent, type StaticQuestion } from '@/types/mock-test';
-
-/** An error whose message is safe to show the user, with the HTTP status the route should send. */
-export class MockApiError extends Error {
-  constructor(message: string, public status = 502) {
-    super(message);
-  }
-}
-
-export function errorResponse(error: unknown) {
-  if (error instanceof MockApiError) return Response.json({ error: error.message }, { status: error.status });
-  console.error(error);
-  return Response.json({ error: 'Something went wrong while talking to Gemini.' }, { status: 500 });
-}
 
 export const VARIANTS_PER_SET = 2;
 /** Sets per rewrite call: small enough to stay well inside the output limit. */
@@ -25,7 +13,7 @@ const PARALLEL_CALLS = 4;
 let client: GoogleGenAI | null = null;
 function getClient() {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new MockApiError('GEMINI_API_KEY is not set. Add it to .env.local and restart the dev server.', 500);
+  if (!apiKey) throw new HttpError('GEMINI_API_KEY is not set. Add it to .env.local, or to the Vercel project\'s environment variables, then restart or redeploy.', 500);
   client ??= new GoogleGenAI({ apiKey });
   return client;
 }
@@ -42,16 +30,16 @@ async function generateJson<T>(parts: PartUnion[], schema: object): Promise<T> {
     text = response.text;
   } catch (error) {
     if (error instanceof ApiError) {
-      if (error.status === 429) throw new MockApiError('Gemini quota or rate limit reached. Wait a minute and try again.', 429);
-      if (error.status === 400 || error.status === 403) throw new MockApiError(`Gemini rejected the request: ${error.message}`, error.status);
+      if (error.status === 429) throw new HttpError('Gemini quota or rate limit reached. Wait a minute and try again.', 429);
+      if (error.status === 400 || error.status === 403) throw new HttpError(`Gemini rejected the request: ${error.message}`, error.status);
     }
-    throw new MockApiError(`Gemini request failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new HttpError(`Gemini request failed: ${error instanceof Error ? error.message : String(error)}`, 502);
   }
-  if (!text) throw new MockApiError('Gemini returned an empty response. Try again.');
+  if (!text) throw new HttpError('Gemini returned an empty response. Try again.', 502);
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new MockApiError('Gemini returned malformed JSON. Try again.');
+    throw new HttpError('Gemini returned malformed JSON. Try again.', 502);
   }
 }
 
@@ -115,7 +103,7 @@ export async function extractSets(pdf: Buffer): Promise<{ title: string; sets: Q
       usedVariants: [],
     });
   }
-  if (!sets.length) throw new MockApiError('No questions could be read from this PDF. Is it a scanned image or a password-protected file?', 422);
+  if (!sets.length) throw new HttpError('No questions could be read from this PDF. Is it a scanned image or a password-protected file?', 422);
   return { title: asString(result.title), sets };
 }
 

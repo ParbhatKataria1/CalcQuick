@@ -6,8 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, ArrowLeft, Eye, Loader2, Pencil, Play, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { mockApi, requestVariants } from '@/lib/mock-api';
-import { buildMockTest, isTemplated, sectionCounts, type SectionPlan } from '@/lib/mock-generator';
+import { mockApi } from '@/lib/mock-api';
+import { sectionCounts, type SectionPlan } from '@/lib/mock-generator';
 import { useLoad } from '@/lib/use-load';
 import { cn } from '@/lib/utils';
 import { SECTIONS, sectionLabel, type MockSource, type MockTest, type Section } from '@/types/mock-test';
@@ -20,9 +20,6 @@ const PRELIMS: Record<Section, { questions: number; minutes: number }> = {
   quant: { questions: 35, minutes: 20 },
   reasoning: { questions: 35, minutes: 20 },
 };
-
-/** Sets for one "Generate more" call; the route accepts up to 40. */
-const VARIANT_REQUEST_SETS = 20;
 
 export default function MockSourcePage({ params }: { params: Promise<{ sourceId: string }> }) {
   const { sourceId } = use(params);
@@ -70,14 +67,8 @@ function SourceSetup({ source, warning, onChanged }: { source: MockSource; warni
     setMessage(null);
     try {
       const sections: SectionPlan[] = chosen.map((section) => ({ section, questions: plan[section].questions, durationSeconds: plan[section].minutes * 60 }));
-      const testNumber = (await mockApi.listAttempts(source.id)).length + 1;
-      const { test, usedVariants } = buildMockTest(source, { name: `${source.name} · Test ${testNumber}`, timing, sections });
-      await mockApi.createTest(test);
-      if (Object.keys(usedVariants).length) {
-        const sets = source.sets.map((set) => (set.id in usedVariants ? { ...set, usedVariants: [...new Set([...set.usedVariants, usedVariants[set.id]])] } : set));
-        await mockApi.updateSource(source.id, { sets });
-      }
-      router.push(`/mock-tests/test/${test.id}/instructions`);
+      const { id } = await mockApi.createTest(source.id, timing, sections);
+      router.push(`/mock-tests/test/${id}/instructions`);
     } catch (caught) {
       setMessage({ tone: 'error', text: caught instanceof Error ? caught.message : String(caught) });
       setStarting(false);
@@ -88,15 +79,7 @@ function SourceSetup({ source, warning, onChanged }: { source: MockSource; warni
     setGenerating(section);
     setMessage(null);
     try {
-      // Sets with the fewest unseen versions first.
-      const targets = source.sets
-        .filter((set) => set.section === section && !isTemplated(set))
-        .sort((a, b) => (a.variants.length - a.usedVariants.length) - (b.variants.length - b.usedVariants.length))
-        .slice(0, VARIANT_REQUEST_SETS);
-      const variants = await requestVariants(targets);
-      const added = Object.values(variants).reduce((sum, items) => sum + items.length, 0);
-      const sets = source.sets.map((set) => (variants[set.id]?.length ? { ...set, variants: [...set.variants, ...variants[set.id]] } : set));
-      await mockApi.updateSource(source.id, { sets });
+      const { added } = await mockApi.generateVariants(source.id, section);
       setMessage({ tone: 'info', text: `Added ${added} new ${added === 1 ? 'version' : 'versions'} to ${sectionLabel[section]}.` });
       onChanged();
     } catch (caught) {
@@ -109,7 +92,7 @@ function SourceSetup({ source, warning, onChanged }: { source: MockSource; warni
   const rename = async () => {
     const name = window.prompt('Paper name', source.name)?.trim();
     if (!name || name === source.name) return;
-    await mockApi.updateSource(source.id, { name });
+    await mockApi.renameSource(source.id, name);
     onChanged();
   };
 

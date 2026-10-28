@@ -23,7 +23,7 @@ A responsive, gamified calculation-practice frontend for SBI Clerk, IBPS Clerk/C
 - Weak-area weighted practice
 - Personal bests and achievements
 - Performance analytics with Recharts
-- Browser `localStorage` persistence
+- Accounts (sign up, log in, log out); progress and mock tests are saved per user
 - Responsive sidebar/mobile navigation
 - Every screen has its own URL: sessions keep their settings in the query (`/practice/session?cat=tables&diff=medium&n=20`) and results live at `<setup>/result/[sessionId]`
 - Mock tests from PDFs (Quant, Reasoning, English) in an IBPS / SBI-style exam interface — see below
@@ -38,7 +38,7 @@ A responsive, gamified calculation-practice frontend for SBI Clerk, IBPS Clerk/C
 - Lucide React
 - Recharts
 
-Practice needs no API keys or database. Mock tests use a Gemini API key and a local json-server store.
+Data is stored in Upstash Redis (or in a local `.data/` folder during development). Mock tests also need a Gemini API key.
 
 ## Run locally
 
@@ -61,19 +61,13 @@ http://localhost:3000
    GEMINI_API_KEY=your-key
    ```
 
-2. Run the app and the mock-test store together:
-
-   ```bash
-   npm run dev:all   # next dev + json-server on http://localhost:4100 (db.json)
-   ```
-
-3. Open **Mock Tests**, upload a prelims PDF, then generate as many tests as you like.
+2. Run `npm run dev`, log in, then open **Mock Tests**, upload a prelims PDF, then generate as many tests as you like.
 
 How it works:
 
 - The PDF is sent to Gemini once (`src/app/api/mock-tests/parse/route.ts`). Numeric Quant questions come back as templates — variables with ranges plus an answer formula — so every test gets fresh numbers locally, with no further API calls (`src/lib/mock-generator.ts`, evaluated safely by `src/lib/expression.ts`).
 - Reasoning, English and Quant that can't be templated (DI, series, puzzles…) get AI-rewritten versions in smaller follow-up calls. Each test prefers versions you haven't seen; **Generate more with AI** adds more.
-- Tests, attempts and papers are saved in `db.json` (git-ignored). Deleting a paper also deletes its tests and attempts.
+- Papers, tests and attempts are saved to the user's account. Deleting a paper also deletes its tests and attempts. PDFs can be up to 4 MB (Vercel's request size limit).
 - The exam screen copies the IBPS / SBI interface: section tabs, sectional or composite timing, question palette with the official status legend, Save & Next, Mark for Review & Next, Clear Response and the pre-submit summary. Marking is +1 / −0.25. Progress autosaves, so a reload resumes the same question.
 
 ## Production validation
@@ -84,9 +78,19 @@ npx tsc --noEmit
 npm run build
 ```
 
-## Data storage
+## Accounts and data storage
 
-The MVP stores progress under a single browser `localStorage` key. The persistence boundary is isolated in `src/context/stats-context.tsx`, so it can later be replaced with Firebase or a backend API without rewriting the practice engine.
+- Every page except the landing page, `/login` and `/signup` needs an account. `src/proxy.ts` redirects visitors without a session cookie; every API route checks the session itself (`src/lib/server/auth.ts`).
+- Passwords are hashed with scrypt. Sessions are random tokens in an httpOnly cookie, stored hashed for 30 days. Logins are limited to 10 wrong attempts per 15 minutes per email.
+- All data lives under per-user keys (`src/lib/server/store.ts`), so one account can never read another's.
+- Practice sessions are sent to the server as events and applied there (`applySession` in `src/lib/stats.ts`), so two devices don't overwrite each other.
+- Progress saved in the browser before accounts existed is imported into the account on first login, if the account has no progress yet.
+- **Settings → Storage** shows what the account uses and has delete buttons for practice history, mock results, unstarted tests and each paper.
+
+### Database
+
+- **Vercel:** in the project, open **Storage**, connect **Upstash for Redis** and redeploy. It sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
+- **Local:** without those variables, data is kept in `.data/` (git-ignored). To use the Vercel database locally instead, run `vercel env pull .env.local`.
 
 ## Main source areas
 
@@ -101,11 +105,12 @@ src/
     session-setup.tsx     # Practice configuration
     ui/                   # Local UI primitives
   constants/              # Category definitions
-  context/                # localStorage stats provider
+  context/                # Auth and stats providers (synced with the server)
   lib/
     question-generator.ts # Dynamic question generation + answer checking
     session-url.ts        # Session settings <-> URL query
     gemini.ts             # Server-only Gemini calls for mock tests
+    server/               # Auth, database access and API helpers (server only)
     mock-generator.ts     # Builds mock tests from parsed papers
     stats.ts              # Analytics, XP, levels, weak areas
   types/                  # Shared TypeScript models
