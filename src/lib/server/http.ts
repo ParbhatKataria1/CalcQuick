@@ -10,6 +10,8 @@ export class HttpError extends Error {
 export function errorResponse(error: unknown) {
   if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status });
   console.error(error);
+  // Vercel Blob errors explain setup problems (missing credentials, suspended store), so pass them on.
+  if (error instanceof Error && error.message.startsWith('Vercel Blob:')) return Response.json({ error: `File storage error: ${error.message}` }, { status: 502 });
   return Response.json({ error: 'Something went wrong on the server.' }, { status: 500 });
 }
 

@@ -1,4 +1,4 @@
-import { upload } from '@vercel/blob/client';
+import { upload, uploadPresigned } from '@vercel/blob/client';
 import type { AttemptSummary, MockAttempt, MockSource, MockTest, Section, SourceSummary, TestSummary } from '@/types/mock-test';
 import type { SectionPlan } from '@/lib/mock-generator';
 
@@ -18,7 +18,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const id = encodeURIComponent;
 
-type UploadConfig = { blob: boolean; access: 'public' | 'private'; maxBytes: number; directMaxBytes: number };
+type UploadConfig = { blob: boolean; mode: 'token' | 'presigned' | null; access: 'public' | 'private'; maxBytes: number; directMaxBytes: number };
 
 export type StorageUsage = {
   practice: { bytes: number; sessions: number; answers: number };
@@ -41,12 +41,15 @@ export const mockApi = {
     const config = await request<UploadConfig>('/api/mock/uploads');
     if (file.size > config.maxBytes) throw new Error(`The PDF is larger than ${config.maxBytes / 1024 / 1024} MB. Compress it or split it into parts.`);
     if (config.blob) {
-      const blob = await upload(`mock-pdfs/${userId}/${file.name.replace(/[^\w.-]+/g, '-')}`, file, {
+      // A timestamp keeps names unique; presigned uploads can't add a random suffix.
+      const pathname = `mock-pdfs/${userId}/${Date.now()}-${file.name.replace(/[^\w.-]+/g, '-')}`;
+      const options = {
         access: config.access,
         handleUploadUrl: '/api/mock/uploads',
         contentType: 'application/pdf',
-        onUploadProgress: ({ percentage }) => onUploadProgress?.(percentage),
-      });
+        onUploadProgress: ({ percentage }: { percentage: number }) => onUploadProgress?.(percentage),
+      };
+      const blob = config.mode === 'presigned' ? await uploadPresigned(pathname, file, options) : await upload(pathname, file, options);
       onUploadProgress?.(100);
       return request<{ id: string; warning?: string }>('/api/mock/sources', json('POST', { blobUrl: blob.url, fileName: file.name }));
     }
