@@ -1,71 +1,131 @@
 import 'server-only';
-import { ApiError, GoogleGenAI, type PartUnion } from '@google/genai';
-import { EXTRACTION_PROMPT, REVIEW_PROMPT, VARIANTS_PROMPT, extractionSchema, reviewSchema, variantsSchema } from '@/lib/gemini-prompt';
+import { ApiError, FileState, FinishReason, createPartFromUri, type PartUnion } from '@google/genai';
+import { OUTLINE_PROMPT, REVIEW_PROMPT, VARIANTS_PROMPT, chunkPrompt, extractionSchema, outlineSchema, reviewSchema, variantsSchema } from '@/lib/gemini-prompt';
+import { geminiKeys, withGeminiKey, type GeminiKey } from '@/lib/server/gemini-keys';
 import { decodeEscapes, wordCount } from '@/lib/math-text';
 import { optionSpreadOf, templateWorks, uid } from '@/lib/mock-generator';
 import { HttpError } from '@/lib/server/http';
-import { SECTIONS, type Difficulty, type QuestionSet, type QuestionTemplate, type Section, type SetContent, type StaticQuestion } from '@/types/mock-test';
+import { SECTIONS, type Difficulty, type ImportState, type PaperBlock, type QuestionSet, type QuestionTemplate, type Section, type SetContent, type StaticQuestion } from '@/types/mock-test';
 
 export const VARIANTS_PER_SET = 2;
 /** Sets the browser sends per request; with the review pass this stays well inside the 300 s function limit. */
 export const VARIANT_SETS_PER_REQUEST = 3;
 
-let client: GoogleGenAI | null = null;
-function getClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new HttpError('GEMINI_API_KEY is not set. Add it to .env.local, or to the Vercel project\'s environment variables, then restart or redeploy.', 500);
-  client ??= new GoogleGenAI({ apiKey });
-  return client;
+/** Gemini's answer hit the output limit; the caller should ask for less at once. */
+export class TruncatedError extends HttpError {
+  constructor() {
+    super('Gemini\'s answer was too long and got cut off.', 502);
+  }
 }
 
 /** Waits before each retry while Gemini is overloaded; keeps the whole call well inside the 300 s function limit. */
 const RETRY_DELAYS_MS = [3000, 8000];
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The most the models will write in one answer; asking for it avoids early cut-offs. */
+const MAX_OUTPUT_TOKENS = 65_536;
 
 /** Overloaded (503), internal (500) and gateway errors are usually brief, so they are worth retrying. */
 const isTemporary = (error: unknown) => error instanceof ApiError && [500, 502, 503, 504].includes(error.status);
 
 const models = () => [...new Set([process.env.GEMINI_MODEL || 'gemini-flash-latest', process.env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest'])];
 
-async function generateJson<T>(parts: PartUnion[], schema: object): Promise<T> {
-  const gemini = getClient();
-  const request = (model: string) => gemini.models.generateContent({
-    model,
-    contents: [{ role: 'user', parts: parts.map((part) => (typeof part === 'string' ? { text: part } : part)) }],
-    config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4 },
-  });
+/** Parts of a request; a function when they depend on the key (an uploaded PDF belongs to one key). */
+type Parts = PartUnion[] | ((key: GeminiKey) => Promise<PartUnion[]>);
 
+/** Google's answer when an uploaded file has expired, was deleted or belongs to another key; not a problem with the key. */
+const isFileError = (error: unknown) => error instanceof ApiError && [400, 403, 404].includes(error.status) && /\bfile\b/i.test(error.message ?? '');
+
+/**
+ * One Gemini request that returns JSON. Key problems (quota, revoked key) move it to the next key;
+ * overload retries the model and then the lighter fallback model; a cut-off answer throws TruncatedError.
+ */
+async function generateJson<T>(parts: Parts, schema: object, onFileError?: (key: GeminiKey) => void): Promise<T> {
   let text: string | undefined;
-  let lastError: unknown;
-  // Retry the main model a couple of times, then try the lighter fallback model once.
-  const plan = [...[0, ...RETRY_DELAYS_MS].map((delay) => ({ model: models()[0], delay })), ...models().slice(1).map((model) => ({ model, delay: 0 }))];
-  for (const { model, delay } of plan) {
-    if (delay) await sleep(delay);
-    try {
-      text = (await request(model)).text;
-      lastError = undefined;
-      break;
-    } catch (error) {
-      lastError = error;
-      if (!isTemporary(error)) break;
-    }
-  }
-
-  if (lastError) {
-    const error = lastError;
-    if (isTemporary(error)) throw new HttpError('Gemini is overloaded right now (this is on Google\'s side). Wait a few minutes and upload again.', 503);
-    if (error instanceof ApiError) {
-      if (error.status === 429) throw new HttpError('Gemini quota or rate limit reached. Wait a minute and try again.', 429);
-      if (error.status === 400 || error.status === 403) throw new HttpError(`Gemini rejected the request: ${error.message}`, error.status);
-    }
+  try {
+    text = await withGeminiKey(async (key) => {
+      try {
+        return await requestWithKey(key);
+      } catch (error) {
+        if (!onFileError || !isFileError(error)) throw error;
+        // The PDF upload is gone or not this key's: upload it again for this key and retry once.
+        onFileError(key);
+        return requestWithKey(key);
+      }
+    });
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    if (isTemporary(error)) throw new HttpError('Gemini is overloaded right now (this is on Google\'s side). Wait a few minutes and try again; your progress is saved.', 503);
+    if (error instanceof ApiError && error.status === 400) throw new HttpError(`Gemini rejected the request: ${error.message}`, 400);
     throw new HttpError(`Gemini request failed: ${error instanceof Error ? error.message : String(error)}`, 502);
   }
   if (!text) throw new HttpError('Gemini returned an empty response. Try again.', 502);
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new HttpError('Gemini returned malformed JSON. Try again.', 502);
+    // A JSON answer that doesn't parse almost always stopped early.
+    throw new TruncatedError();
   }
+
+  async function requestWithKey(key: GeminiKey) {
+    const contents = [{ role: 'user', parts: (typeof parts === 'function' ? await parts(key) : parts).map((part) => (typeof part === 'string' ? { text: part } : part)) }];
+    // Retry the main model a couple of times, then try the lighter fallback model once.
+    const plan = [...[0, ...RETRY_DELAYS_MS].map((delay) => ({ model: models()[0], delay })), ...models().slice(1).map((model) => ({ model, delay: 0 }))];
+    let lastError: unknown;
+    for (const { model, delay } of plan) {
+      if (delay) await sleep(delay);
+      try {
+        const response = await key.client.models.generateContent({
+          model,
+          contents,
+          config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
+        });
+        if (response.candidates?.[0]?.finishReason === FinishReason.MAX_TOKENS) throw new TruncatedError();
+        return response.text;
+      } catch (error) {
+        lastError = error;
+        if (!isTemporary(error)) throw error;
+      }
+    }
+    throw lastError;
+  }
+}
+
+/** How long to wait for Gemini to finish processing an uploaded PDF. */
+const FILE_READY_TIMEOUT_MS = 120_000;
+/** Re-upload a file this close to its 48-hour expiry rather than risk it vanishing mid-call. */
+const FILE_EXPIRY_MARGIN_MS = 30 * 60_000;
+
+export type GeminiFiles = NonNullable<ImportState['geminiFiles']>;
+
+/**
+ * The paper as a request part for this key. The PDF is uploaded to Gemini once per key (files are only
+ * visible to the key that uploaded them) and the handle is kept in `files`, which the caller saves, so
+ * later steps and other keys reuse or re-create it from the stored PDF.
+ */
+export function pdfPartFor(files: GeminiFiles, loadPdf: () => Promise<Buffer>) {
+  const part = async (key: GeminiKey): Promise<PartUnion> => {
+    const cached = files[key.id];
+    if (cached && cached.expiresAt - FILE_EXPIRY_MARGIN_MS > Date.now()) return createPartFromUri(cached.uri, 'application/pdf');
+    const bytes = await loadPdf();
+    let file = await key.client.files.upload({ file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }), config: { mimeType: 'application/pdf', displayName: 'paper.pdf' } });
+    const started = Date.now();
+    while (file.state === FileState.PROCESSING && file.name && Date.now() - started < FILE_READY_TIMEOUT_MS) {
+      await sleep(2000);
+      file = await key.client.files.get({ name: file.name });
+    }
+    if (file.state !== FileState.ACTIVE || !file.uri || !file.name) throw new HttpError('Gemini could not process this PDF. Is it password-protected or damaged?', 422);
+    files[key.id] = { name: file.name, uri: file.uri, expiresAt: file.expirationTime ? Date.parse(file.expirationTime) : Date.now() + 47 * 60 * 60_000 };
+    return createPartFromUri(file.uri, 'application/pdf');
+  };
+  /** Drops a key's cached upload, so the next request uploads the PDF again. */
+  const forget = (key: GeminiKey) => { delete files[key.id]; };
+  return Object.assign(part, { forget });
+}
+
+/** Removes the paper's uploads from Gemini once it has been read; they would expire after 48 h anyway. */
+export async function deleteGeminiFiles(files: GeminiFiles) {
+  const keys = geminiKeys();
+  await Promise.all(Object.entries(files).map(([keyId, file]) => keys.find((key) => key.id === keyId)?.client.files.delete({ name: file.name }).catch(() => undefined)));
 }
 
 const asString = (value: unknown) => (typeof value === 'string' ? decodeEscapes(value).trim() : '');
@@ -118,17 +178,13 @@ type ExtractedSet = { section?: unknown; topic?: unknown; difficulty?: unknown; 
 const DIFFICULTIES: Difficulty[] = ['easy', 'moderate', 'hard'];
 
 /**
- * Reads the PDF into question sets. A calculation set keeps its templates only if each one gives the
- * original's answer when fed the original numbers, and keeps producing valid questions; otherwise it
- * gets AI-written versions like every other set.
+ * Turns extracted sets into question sets. A calculation set keeps its templates only if each one gives
+ * the original's answer when fed the original numbers, and keeps producing valid questions; otherwise
+ * it gets AI-written versions like every other set.
  */
-export async function extractSets(pdf: Buffer): Promise<{ title: string; sets: QuestionSet[] }> {
-  const result = await generateJson<{ title?: unknown; sets?: ExtractedSet[] }>(
-    [{ inlineData: { mimeType: 'application/pdf', data: pdf.toString('base64') } }, EXTRACTION_PROMPT],
-    extractionSchema,
-  );
+function toQuestionSets(rawSets: ExtractedSet[]): QuestionSet[] {
   const sets: QuestionSet[] = [];
-  for (const raw of result.sets ?? []) {
+  for (const raw of rawSets) {
     const original = cleanContent(raw);
     if (!original) continue;
     const section: Section = SECTIONS.includes(raw.section as Section) ? (raw.section as Section) : 'quant';
@@ -146,8 +202,28 @@ export async function extractSets(pdf: Buffer): Promise<{ title: string; sets: Q
       usedVariants: [],
     });
   }
-  if (!sets.length) throw new HttpError('No questions could be read from this PDF. Is it a scanned image or a password-protected file?', 422);
-  return { title: asString(result.title), sets };
+  return sets;
+}
+
+type PdfPart = ReturnType<typeof pdfPartFor>;
+
+/** First step of reading a paper: its title and every question grouped into blocks, without extracting them. */
+export async function outlinePaper(pdfPart: PdfPart): Promise<{ title: string; blocks: PaperBlock[] }> {
+  const result = await generateJson<{ title?: unknown; blocks?: Array<Partial<PaperBlock>> }>(async (key) => [await pdfPart(key), OUTLINE_PROMPT], outlineSchema, pdfPart.forget);
+  const blocks = (result.blocks ?? [])
+    .map((block) => ({ from: Number(block.from), to: Number(block.to), section: SECTIONS.includes(block.section as Section) ? (block.section as Section) : 'quant', topic: asString(block.topic) || 'General' }))
+    .filter((block) => Number.isInteger(block.from) && Number.isInteger(block.to) && block.from > 0 && block.to >= block.from)
+    .sort((a, b) => a.from - b.from)
+    // Drop blocks that overlap an earlier one, so no question is extracted twice.
+    .filter((block, index, all) => index === 0 || block.from > all[index - 1].to);
+  if (!blocks.length) throw new HttpError('No questions could be found in this PDF. Is it a scanned image or a password-protected file?', 422);
+  return { title: asString(result.title), blocks };
+}
+
+/** Extracts one range of questions; the whole PDF is attached so shared passages and charts are visible. */
+export async function extractQuestions(pdfPart: PdfPart, from: number, to: number): Promise<QuestionSet[]> {
+  const result = await generateJson<{ sets?: ExtractedSet[] }>(async (key) => [await pdfPart(key), chunkPrompt(from, to)], extractionSchema, pdfPart.forget);
+  return toQuestionSets(result.sets ?? []);
 }
 
 /** Allowed difference in length from the original: a share of it, but never less than a few words. */

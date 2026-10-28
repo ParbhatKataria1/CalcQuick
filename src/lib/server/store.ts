@@ -65,6 +65,7 @@ const summarizeSource = (source: MockSource): SourceSummary => {
     createdAt: source.createdAt,
     questions: { quant: counts.quant.questions, reasoning: counts.reasoning.questions, english: counts.english.questions },
     bytes: sizeOf(source),
+    status: source.importState?.status ?? 'ready',
   };
 };
 

@@ -1,5 +1,5 @@
 import { requireUser } from '@/lib/server/auth';
-import { VARIANT_SETS_PER_REQUEST, writeVariants } from '@/lib/gemini';
+import { TruncatedError, VARIANT_SETS_PER_REQUEST, writeVariants } from '@/lib/gemini';
 import { HttpError, readJson, route } from '@/lib/server/http';
 import { getSource, saveSource } from '@/lib/server/store';
 import { isTemplated, setsNeedingVersions } from '@/lib/mock-generator';
@@ -19,13 +19,23 @@ export const POST = route(async (request: Request, { params }: { params: Promise
   const skipped = new Set(Array.isArray(skip) ? skip : []);
   if (section !== undefined && !SECTIONS.includes(section)) throw new HttpError('Unknown section.');
   const source = await getSource(user.id, (await params).id);
+  if (source.importState?.status === 'reading') throw new HttpError('This paper is still being read. Wait until it finishes.', 409);
   const pool = section
     ? source.sets.filter((set) => set.section === section && !isTemplated(set)).sort((a, b) => (a.variants.length - a.usedVariants.length) - (b.variants.length - b.usedVariants.length))
     : setsNeedingVersions(source).filter((set) => !skipped.has(set.id));
-  const targets = pool.slice(0, VARIANT_SETS_PER_REQUEST);
+  let targets = pool.slice(0, VARIANT_SETS_PER_REQUEST);
   if (!targets.length) return Response.json({ added: 0, rejected: [], remaining: 0 });
 
-  const { accepted, rejected } = await writeVariants(targets);
+  let written: Awaited<ReturnType<typeof writeVariants>>;
+  try {
+    written = await writeVariants(targets);
+  } catch (error) {
+    if (!(error instanceof TruncatedError) || targets.length === 1) throw error;
+    // Long passages made the answer too big: do one set now; the others come back in the next request.
+    targets = targets.slice(0, 1);
+    written = await writeVariants(targets);
+  }
+  const { accepted, rejected } = written;
   // Re-read before saving, so versions marked as seen while Gemini was working are kept.
   const latest = await getSource(user.id, source.id);
   const sets = latest.sets.map((set) => (accepted[set.id]?.length ? { ...set, variants: [...set.variants, ...accepted[set.id]] } : set));

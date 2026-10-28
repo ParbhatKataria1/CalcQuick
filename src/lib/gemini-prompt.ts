@@ -1,7 +1,8 @@
 /**
- * Prompts and JSON schemas for Gemini. Reading a PDF is one call that extracts the questions and writes
- * templates for calculation questions. New versions of the rest are written later, a few sets per call,
- * and every one is reviewed by a second call before it is used.
+ * Prompts and JSON schemas for Gemini. A paper is read in parts: an outline call lists the question
+ * blocks, then each chunk of questions is extracted (with templates for calculation questions) in its
+ * own call, so no answer gets long enough to be cut off. New versions of the rest are written later,
+ * a few sets per call, and every one is reviewed by a second call before it is used.
  */
 
 /** How maths is written everywhere, so the app can display it and nothing arrives as escape codes. */
@@ -62,6 +63,42 @@ const setContentSchema = {
   },
   required: ['questions'],
 };
+
+export const outlineSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Name of the paper, e.g. "IBPS Clerk Prelims 2025 · 4 Oct Shift 1".' },
+    blocks: {
+      type: 'array',
+      description: 'Every question in the paper, in order, grouped into blocks.',
+      items: {
+        type: 'object',
+        properties: {
+          from: { type: 'integer', description: 'First question number in the block.' },
+          to: { type: 'integer', description: 'Last question number in the block (same as from for a single question).' },
+          section: { type: 'string', enum: ['quant', 'reasoning', 'english'] },
+          topic: { type: 'string' },
+        },
+        required: ['from', 'to', 'section', 'topic'],
+      },
+    },
+  },
+  required: ['title', 'blocks'],
+};
+
+export const OUTLINE_PROMPT = `List the questions in the attached bank exam paper (IBPS / SBI PO & Clerk), without extracting them.
+
+Return every question, in order, grouped into blocks:
+- One block for each group of questions that share a passage, puzzle, seating arrangement or DI chart (e.g. "Directions (1-5)" over a table is one block 1-5).
+- Every other question is its own block (from = to), even under shared directions such as "What should come in place of ?".
+- Use the question numbers printed in the paper. If questions are unnumbered, number them 1, 2, 3… in order.
+- Give each block its section ("quant", "reasoning" or "english") and topic.
+Skip advertisements and pages without questions. Return JSON only, matching the schema.`;
+
+/** Extraction limited to one range of questions; the whole PDF is still attached so shared passages and charts are visible. */
+export const chunkPrompt = (from: number, to: number) => `${EXTRACTION_PROMPT}
+
+IMPORTANT: extract ONLY questions ${from} to ${to} (by question number), nothing before or after. Use the whole document to read any directions, passages, tables or charts these questions refer to.`;
 
 export const extractionSchema = {
   type: 'object',

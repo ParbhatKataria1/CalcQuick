@@ -35,7 +35,70 @@ export default function MockSourcePage({ params }: { params: Promise<{ sourceId:
       </Card>
     );
   }
+  if (source.importState?.status === 'reading') return <ReadingPaper source={source} onDone={reload} />;
   return <SourceSetup source={source} onChanged={reload} />;
+}
+
+/**
+ * Reads a freshly uploaded paper one part per request (outline, then chunks of questions) and shows
+ * progress. Each part is saved as it finishes, so stopping, an error or closing the tab loses nothing.
+ */
+function ReadingPaper({ source, onDone }: { source: MockSource; onDone: () => void }) {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const stopRef = useRef(false);
+  const startedRef = useRef(false);
+
+  const read = useCallback(async () => {
+    stopRef.current = false;
+    setRunning(true);
+    setError(null);
+    try {
+      for (;;) {
+        const step = await mockApi.importStep(source.id);
+        setProgress({ done: step.done, total: step.total });
+        if (step.status === 'ready') {
+          onDone();
+          return;
+        }
+        if (stopRef.current) break;
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunning(false);
+    }
+  }, [onDone, source.id]);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void read();
+  }, [read]);
+
+  const label = !progress || progress.total <= 1
+    ? 'Finding the questions in the paper…'
+    : `Reading questions… ${Math.max(0, progress.done - 1)} of ${progress.total - 1} parts done`;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <Link href="/mock-tests" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400"><ArrowLeft className="size-4" /> All papers</Link>
+      <Card className="p-6">
+        <div className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-300">Reading the paper</div>
+        <h1 className="mt-2 text-2xl font-bold">{source.name}</h1>
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Gemini reads the paper in parts of about 15 questions, so even long papers fit. Each part is saved as soon as it&apos;s done: you can stop, close this page or come back later.</p>
+        <div className="mt-5 flex items-center gap-2 text-sm font-semibold">{running && <Loader2 className="size-4 animate-spin text-indigo-600" />} {label}</div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${progress ? (progress.done / progress.total) * 100 : 5}%` }} /></div>
+        {error && <div className="mt-4 flex items-start gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"><AlertTriangle className="mt-0.5 size-4 shrink-0" /> {error}</div>}
+        <div className="mt-5 flex gap-2">
+          {running
+            ? <Button variant="outline" onClick={() => { stopRef.current = true; }}>Stop after this part</Button>
+            : <Button onClick={() => void read()}><Play className="size-4 fill-current" /> {error ? 'Try again' : 'Continue reading'}</Button>}
+        </div>
+      </Card>
+    </div>
+  );
 }
 
 type Progress = { done: number; total: number; added: number; rejected: number; failed: string[] };
@@ -150,6 +213,13 @@ function SourceSetup({ source, onChanged }: { source: MockSource; onChanged: () 
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${writing.total ? (writing.done / writing.total) * 100 : 0}%` }} /></div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{writing.added} accepted · {writing.rejected} rejected so far. Each batch takes about a minute; you can start a test meanwhile, but sets without a version yet will repeat earlier ones.</p>
         </Card>
+      )}
+
+      {Boolean(source.importState?.skipped?.length) && (
+        <div className="flex items-start gap-2 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <div>Some questions couldn&apos;t be read and are left out of this paper: {source.importState!.skipped!.join('; ')}.</div>
+        </div>
       )}
 
       {message && (

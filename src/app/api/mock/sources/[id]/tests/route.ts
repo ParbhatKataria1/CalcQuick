@@ -15,6 +15,7 @@ export const POST = route(async (request: Request, { params }: { params: Promise
   }
 
   const source = await getSource(user.id, (await params).id);
+  if (source.importState?.status === 'reading') throw new HttpError('This paper is still being read. Wait until it finishes.', 409);
   const testNumber = (await listTests(user.id)).filter((test) => test.sourceId === source.id).length + 1;
   const { test, usedVariants, repeated } = buildMockTest(source, { name: `${source.name} · Test ${testNumber}`, timing: body.timing === 'composite' ? 'composite' : 'sectional', durations });
   if (!test.sections.length) throw new HttpError('This paper has no questions.');

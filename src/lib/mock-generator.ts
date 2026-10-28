@@ -213,7 +213,7 @@ type Picked = { content: SetContent; variantIndex: number | null; repeated: bool
 
 function pickContent(set: QuestionSet, rng: Rng): Picked {
   if (set.templates?.length) {
-    const questions = set.templates.map((template, index) => instantiate(template, rng));
+    const questions = set.templates.map((template) => instantiate(template, rng));
     if (questions.every(Boolean)) return { content: { passage: set.original.passage, questions: questions as StaticQuestion[] }, variantIndex: null, repeated: false };
   }
   const unused = set.variants.map((_, index) => index).filter((index) => !set.usedVariants.includes(index));

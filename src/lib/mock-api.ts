@@ -60,6 +60,9 @@ export const mockApi = {
     onUploadProgress?.(100);
     return request<{ id: string }>('/api/mock/sources', { method: 'POST', body: form });
   },
+  /** Reads the next part of a paper; call until the status is "ready". */
+  importStep: (sourceId: string) =>
+    request<{ status: 'reading' | 'ready'; done: number; total: number; skipped: string[] }>(`/api/mock/sources/${id(sourceId)}/import`, { method: 'POST' }),
   /** Writes and reviews versions for a few sets: those without an unseen version, or more for one section. */
   generateVariants: (sourceId: string, options: { section?: Section; skip?: string[] } = {}) =>
     request<{ added: number; rejected: string[]; remaining: number; failedSetIds: string[] }>(`/api/mock/sources/${id(sourceId)}/variants`, json('POST', options)),

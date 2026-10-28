@@ -79,6 +79,11 @@ function UploadCard() {
 
   const upload = async (file: File | undefined) => {
     if (!file || busy) return;
+    // Uploads go into the user's own folder, so wait until the account has loaded.
+    if (!user) {
+      setError('Still loading your account. Try again in a moment.');
+      return;
+    }
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       setError('Choose a PDF file.');
       return;
@@ -88,7 +93,7 @@ function UploadCard() {
     setUploaded(0);
     setBusy({ fileName: file.name, startedAt: Date.now() });
     try {
-      const { id } = await mockApi.uploadPdf(file, user!.id, setUploaded);
+      const { id } = await mockApi.uploadPdf(file, user.id, setUploaded);
       router.push(`/mock-tests/${id}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -113,24 +118,16 @@ function UploadCard() {
         {busy ? (
           <>
             <Loader2 className="size-9 animate-spin text-indigo-600" />
-            {uploaded < 100 ? (
-              <>
-                <div className="mt-4 font-bold">Uploading {busy.fileName}… {Math.round(uploaded)}%</div>
-                <div className="mt-3 h-1.5 w-64 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${uploaded}%` }} /></div>
-              </>
-            ) : (
-              <>
-                <div className="mt-4 font-bold">Reading {busy.fileName}</div>
-                <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Gemini is extracting the questions and building templates for the calculation questions. A full paper takes 1–3 minutes. ({elapsed}s)</p>
-              </>
-            )}
+            <div className="mt-4 font-bold">{uploaded < 100 ? `Uploading ${busy.fileName}… ${Math.round(uploaded)}%` : `Saving ${busy.fileName}…`}</div>
+            <div className="mt-3 h-1.5 w-64 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${uploaded}%` }} /></div>
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">The paper is read on the next page, in parts. ({elapsed}s)</p>
           </>
         ) : (
           <>
             <div className="flex size-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300"><Upload className="size-6" /></div>
             <div className="mt-4 font-bold">Drop a mock test PDF here</div>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Text-based PDFs up to 8 MB. An answer key in the PDF makes the answers more reliable.</p>
-            <Button className="mt-5" onClick={() => inputRef.current?.click()}><Upload className="size-4" /> Choose PDF</Button>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">PDFs up to 25 MB, including scanned papers. An answer key in the PDF makes the answers more reliable.</p>
+            <Button className="mt-5" disabled={!user} onClick={() => inputRef.current?.click()}><Upload className="size-4" /> Choose PDF</Button>
             <input ref={inputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ''; }} />
           </>
         )}
@@ -163,7 +160,9 @@ function SourceCard({ source, onDeleted }: { source: SourceSummary; onDeleted: (
           </div>
         ))}
       </div>
-      <Link href={`/mock-tests/${source.id}`} className="mt-4 inline-flex items-center gap-2 self-start text-sm font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Generate a test <ArrowRight className="size-4" /></Link>
+      <Link href={`/mock-tests/${source.id}`} className="mt-4 inline-flex items-center gap-2 self-start text-sm font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">
+        {source.status === 'reading' ? <><span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Reading not finished</span> Continue reading</> : 'Generate a test'} <ArrowRight className="size-4" />
+      </Link>
     </Card>
   );
 }

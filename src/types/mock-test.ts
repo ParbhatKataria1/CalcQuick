@@ -76,12 +76,36 @@ export type QuestionSet = {
   usedVariants: number[];
 };
 
+/** Where an uploaded PDF is kept while the paper is being read. */
+export type PdfRef = { kind: 'blob'; url: string } | { kind: 'file'; path: string } | { kind: 'kv'; key: string };
+
+/** One set of directions, puzzle, passage or chart, or a single question, as numbered in the paper. */
+export type PaperBlock = { from: number; to: number; section: Section; topic: string };
+
+/**
+ * Progress of reading a paper, which takes several requests: an outline call, then one call per chunk
+ * of questions. Everything needed to carry on (the PDF, the outline, finished chunks and the PDF's
+ * Gemini upload for each API key) is kept here, so a new request or another API key resumes the work.
+ */
+export type ImportState = {
+  status: 'reading' | 'ready';
+  pdf?: PdfRef;
+  blocks?: PaperBlock[];
+  chunks: Array<{ from: number; to: number; status: 'pending' | 'done' | 'failed' }>;
+  /** The PDF uploaded to Gemini, per API key id; a file is only visible to the key that uploaded it. */
+  geminiFiles?: Record<string, { name: string; uri: string; expiresAt: number }>;
+  /** Questions that could not be read, shown to the user. */
+  skipped?: string[];
+};
+
 export type MockSource = {
   id: string;
   name: string;
   fileName: string;
   createdAt: number;
   sets: QuestionSet[];
+  /** Missing on papers read in one go before reading in parts existed; those are ready. */
+  importState?: ImportState;
 };
 
 export type MockQuestion = {
@@ -151,6 +175,6 @@ export const MARKS_CORRECT = 1;
 export const MARKS_WRONG = -0.25;
 
 /** List entries kept beside the full documents, so lists never load whole papers. `bytes` is the stored size. */
-export type SourceSummary = Pick<MockSource, 'id' | 'name' | 'fileName' | 'createdAt'> & { questions: Record<Section, number>; bytes: number };
+export type SourceSummary = Pick<MockSource, 'id' | 'name' | 'fileName' | 'createdAt'> & { questions: Record<Section, number>; bytes: number; status?: ImportState['status'] };
 export type TestSummary = Pick<MockTest, 'id' | 'sourceId' | 'name' | 'createdAt'> & { bytes: number };
 export type AttemptSummary = Pick<MockAttempt, 'id' | 'testId' | 'sourceId' | 'testName' | 'startedAt' | 'endedAt' | 'score' | 'maxScore'> & { bytes: number };
