@@ -1,6 +1,13 @@
 import { upload, uploadPresigned } from '@vercel/blob/client';
 import type { AttemptSummary, MockAttempt, MockSource, MockTest, Section, SourceSummary, TestSummary } from '@/types/mock-test';
 
+/** A failed API call. `retryAfter` (seconds) means the condition passes on its own and the call can simply be repeated. */
+export class ApiRequestError extends Error {
+  constructor(message: string, public status: number, public retryAfter?: number) {
+    super(message);
+  }
+}
+
 /** Calls the app's own API, which stores mock tests in the signed-in account. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -10,7 +17,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error('Could not reach the server. Check your connection and try again.');
   }
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
+  if (!response.ok) throw new ApiRequestError(body.error ?? `Request failed (${response.status}).`, response.status, typeof body.retryAfter === 'number' ? body.retryAfter : undefined);
   return body as T;
 }
 
@@ -85,6 +92,24 @@ export const mockApi = {
   storageUsage: () => request<StorageUsage>('/api/storage'),
   clearStorage: (what: 'attempts' | 'unstartedTests') => request<{ deleted: number }>(`/api/storage?what=${what}`, { method: 'DELETE' }),
 };
+
+/**
+ * Repeats a call while the server says to wait (a step still running, Gemini briefly overloaded),
+ * telling the caller what it is waiting for. Other errors, and too many waits in a row, are thrown.
+ */
+export async function withRetries<T>(call: () => Promise<T>, onWait: (message: string | null) => void, maxWaits = 30): Promise<T> {
+  for (let waits = 0; ; waits++) {
+    try {
+      const result = await call();
+      onWait(null);
+      return result;
+    } catch (error) {
+      if (!(error instanceof ApiRequestError) || !error.retryAfter || waits >= maxWaits) throw error;
+      onWait(error.message);
+      await new Promise((resolve) => setTimeout(resolve, (error as ApiRequestError).retryAfter! * 1000));
+    }
+  }
+}
 
 export const formatBytes = (bytes: number) =>
   bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(2)} MB`;

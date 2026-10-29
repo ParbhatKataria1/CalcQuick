@@ -1,14 +1,22 @@
 import 'server-only';
 
-/** An error whose message is safe to show the user, with the HTTP status to send. */
+/**
+ * An error whose message is safe to show the user, with the HTTP status to send. `retryAfter` (seconds)
+ * marks a passing condition the browser should wait out and retry by itself, such as a step still running.
+ */
 export class HttpError extends Error {
-  constructor(message: string, public status = 400) {
+  constructor(message: string, public status = 400, public retryAfter?: number) {
     super(message);
   }
 }
 
 export function errorResponse(error: unknown) {
-  if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status });
+  if (error instanceof HttpError) {
+    return Response.json(
+      { error: error.message, retryAfter: error.retryAfter },
+      { status: error.status, headers: error.retryAfter ? { 'Retry-After': String(error.retryAfter) } : undefined },
+    );
+  }
   console.error(error);
   // Vercel Blob errors explain setup problems (missing credentials, suspended store), so pass them on.
   if (error instanceof Error && error.message.startsWith('Vercel Blob:')) return Response.json({ error: `File storage error: ${error.message}` }, { status: 502 });

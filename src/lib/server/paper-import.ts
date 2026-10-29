@@ -1,5 +1,5 @@
 import 'server-only';
-import { TruncatedError, deleteGeminiFiles, extractQuestions, outlinePaper, pdfPartFor } from '@/lib/gemini';
+import { StepBudget, TruncatedError, deleteGeminiFiles, extractQuestions, outlinePaper, pdfPartFor } from '@/lib/gemini';
 import { HttpError } from '@/lib/server/http';
 import { kv } from '@/lib/server/kv';
 import { dropPdf, loadPdf } from '@/lib/server/pdf-store';
@@ -8,8 +8,16 @@ import type { ImportState, MockSource, PaperBlock } from '@/types/mock-test';
 
 /** Questions extracted per call: small enough that the answer is never cut off, with room for long passages. */
 const QUESTIONS_PER_CHUNK = 15;
-/** Only one step runs per paper at a time, so two open tabs can't read the same chunk twice. */
-const STEP_LOCK_SECONDS = 290;
+/**
+ * A step's Gemini work must finish within this, leaving time to save before Vercel's 300 s limit, so the
+ * step always ends normally and releases its lock.
+ */
+const STEP_BUDGET_SECONDS = 240;
+/**
+ * Only one step runs per paper at a time, so a reload or a second tab can't read the same chunk twice.
+ * The lock outlives the budget only in case a request is killed without saving.
+ */
+const STEP_LOCK_SECONDS = 300;
 
 export type ImportProgress = { status: ImportState['status']; done: number; total: number; skipped: string[] };
 
@@ -52,19 +60,24 @@ export async function runImportStep(userId: string, sourceId: string): Promise<I
   if (source.importState?.status !== 'reading') return importProgress(source);
 
   const lockKey = `import-lock:${userId}:${sourceId}`;
-  if (await kv.get(lockKey)) throw new HttpError('This paper is already being read in another tab. Wait a moment.', 409);
-  await kv.set(lockKey, true, { ttlSeconds: STEP_LOCK_SECONDS });
+  const lock = await kv.get<{ startedAt: number }>(lockKey);
+  // A lock older than any step can run is left by a killed request, so it no longer counts.
+  if (lock && Date.now() - lock.startedAt < STEP_LOCK_SECONDS * 1000) {
+    throw new HttpError('A part of this paper is still being read (for example from before a reload). Waiting for it to finish…', 409, 10);
+  }
+  await kv.set(lockKey, { startedAt: Date.now() }, { ttlSeconds: STEP_LOCK_SECONDS });
+  const budget = StepBudget.seconds(STEP_BUDGET_SECONDS);
 
   const state: ImportState = { ...source.importState, geminiFiles: { ...source.importState.geminiFiles } };
   if (!state.pdf) throw new HttpError('The uploaded PDF is missing. Delete this paper and upload it again.', 410);
   let pdf: Promise<Buffer> | null = null;
-  const pdfPart = pdfPartFor(state.geminiFiles!, () => (pdf ??= loadPdf(state.pdf!)));
+  const pdfPart = pdfPartFor(state.geminiFiles!, () => (pdf ??= loadPdf(state.pdf!)), budget);
   let newSets: MockSource['sets'] = [];
   let name = source.name;
 
   try {
     if (!state.blocks) {
-      const outline = await outlinePaper(pdfPart);
+      const outline = await outlinePaper(pdfPart, budget);
       state.blocks = outline.blocks;
       state.chunks = chunkBlocks(outline.blocks);
       if (outline.title) name = outline.title;
@@ -73,7 +86,7 @@ export async function runImportStep(userId: string, sourceId: string): Promise<I
       const chunk = state.chunks[index];
       if (chunk) {
         try {
-          newSets = await extractQuestions(pdfPart, chunk.from, chunk.to);
+          newSets = await extractQuestions(pdfPart, chunk.from, chunk.to, budget);
           if (newSets.length) state.chunks[index] = { ...chunk, status: 'done' };
           else {
             state.chunks[index] = { ...chunk, status: 'failed' };

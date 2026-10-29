@@ -18,6 +18,33 @@ export class TruncatedError extends HttpError {
   }
 }
 
+/** A step ran out of its time budget; the browser waits a moment and runs it again. */
+export class OutOfTimeError extends HttpError {
+  constructor() {
+    super('This part took too long, so it was stopped and will be tried again.', 503, 5);
+  }
+}
+
+/** Never start a Gemini call with less time left than this; it would only be cut off. */
+const MIN_CALL_MS = 20_000;
+
+/**
+ * A request's time budget, shared by every Gemini call, upload and retry in it, so the request always
+ * ends (and releases its lock) before Vercel's 300 s limit stops it mid-way.
+ */
+export class StepBudget {
+  constructor(public readonly deadline: number) {}
+  static seconds(seconds: number) { return new StepBudget(Date.now() + seconds * 1000); }
+  remaining() { return this.deadline - Date.now(); }
+  /** An abort signal for the next call, or OutOfTimeError when too little time is left to be worth it. */
+  signal() {
+    if (this.remaining() < MIN_CALL_MS) throw new OutOfTimeError();
+    return AbortSignal.timeout(this.remaining());
+  }
+}
+
+const isAbort = (error: unknown) => error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError' || /abort/i.test(error.message));
+
 /** Waits before each retry while Gemini is overloaded; keeps the whole call well inside the 300 s function limit. */
 const RETRY_DELAYS_MS = [3000, 8000];
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,7 +66,7 @@ const isFileError = (error: unknown) => error instanceof ApiError && [400, 403, 
  * One Gemini request that returns JSON. Key problems (quota, revoked key) move it to the next key;
  * overload retries the model and then the lighter fallback model; a cut-off answer throws TruncatedError.
  */
-async function generateJson<T>(parts: Parts, schema: object, onFileError?: (key: GeminiKey) => void): Promise<T> {
+async function generateJson<T>(parts: Parts, schema: object, budget: StepBudget, onFileError?: (key: GeminiKey) => void): Promise<T> {
   let text: string | undefined;
   try {
     text = await withGeminiKey(async (key) => {
@@ -54,7 +81,8 @@ async function generateJson<T>(parts: Parts, schema: object, onFileError?: (key:
     });
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    if (isTemporary(error)) throw new HttpError('Gemini is overloaded right now (this is on Google\'s side). Wait a few minutes and try again; your progress is saved.', 503);
+    if (isAbort(error)) throw new OutOfTimeError();
+    if (isTemporary(error)) throw new HttpError('Gemini is overloaded right now (this is on Google\'s side). Trying again shortly; your progress is saved.', 503, 30);
     if (error instanceof ApiError && error.status === 400) throw new HttpError(`Gemini rejected the request: ${error.message}`, 400);
     throw new HttpError(`Gemini request failed: ${error instanceof Error ? error.message : String(error)}`, 502);
   }
@@ -72,12 +100,14 @@ async function generateJson<T>(parts: Parts, schema: object, onFileError?: (key:
     const plan = [...[0, ...RETRY_DELAYS_MS].map((delay) => ({ model: models()[0], delay })), ...models().slice(1).map((model) => ({ model, delay: 0 }))];
     let lastError: unknown;
     for (const { model, delay } of plan) {
+      // Only retry if the wait and another call still fit in this request's time.
+      if (lastError && budget.remaining() < delay + MIN_CALL_MS) break;
       if (delay) await sleep(delay);
       try {
         const response = await key.client.models.generateContent({
           model,
           contents,
-          config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
+          config: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS, abortSignal: budget.signal() },
         });
         if (response.candidates?.[0]?.finishReason === FinishReason.MAX_TOKENS) throw new TruncatedError();
         return response.text;
@@ -102,14 +132,15 @@ export type GeminiFiles = NonNullable<ImportState['geminiFiles']>;
  * visible to the key that uploaded them) and the handle is kept in `files`, which the caller saves, so
  * later steps and other keys reuse or re-create it from the stored PDF.
  */
-export function pdfPartFor(files: GeminiFiles, loadPdf: () => Promise<Buffer>) {
+export function pdfPartFor(files: GeminiFiles, loadPdf: () => Promise<Buffer>, budget: StepBudget) {
   const part = async (key: GeminiKey): Promise<PartUnion> => {
     const cached = files[key.id];
     if (cached && cached.expiresAt - FILE_EXPIRY_MARGIN_MS > Date.now()) return createPartFromUri(cached.uri, 'application/pdf');
     const bytes = await loadPdf();
-    let file = await key.client.files.upload({ file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }), config: { mimeType: 'application/pdf', displayName: 'paper.pdf' } });
+    let file = await key.client.files.upload({ file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }), config: { mimeType: 'application/pdf', displayName: 'paper.pdf', abortSignal: budget.signal() } });
     const started = Date.now();
     while (file.state === FileState.PROCESSING && file.name && Date.now() - started < FILE_READY_TIMEOUT_MS) {
+      if (budget.remaining() < MIN_CALL_MS) throw new OutOfTimeError();
       await sleep(2000);
       file = await key.client.files.get({ name: file.name });
     }
@@ -208,8 +239,8 @@ function toQuestionSets(rawSets: ExtractedSet[]): QuestionSet[] {
 type PdfPart = ReturnType<typeof pdfPartFor>;
 
 /** First step of reading a paper: its title and every question grouped into blocks, without extracting them. */
-export async function outlinePaper(pdfPart: PdfPart): Promise<{ title: string; blocks: PaperBlock[] }> {
-  const result = await generateJson<{ title?: unknown; blocks?: Array<Partial<PaperBlock>> }>(async (key) => [await pdfPart(key), OUTLINE_PROMPT], outlineSchema, pdfPart.forget);
+export async function outlinePaper(pdfPart: PdfPart, budget: StepBudget): Promise<{ title: string; blocks: PaperBlock[] }> {
+  const result = await generateJson<{ title?: unknown; blocks?: Array<Partial<PaperBlock>> }>(async (key) => [await pdfPart(key), OUTLINE_PROMPT], outlineSchema, budget, pdfPart.forget);
   const blocks = (result.blocks ?? [])
     .map((block) => ({ from: Number(block.from), to: Number(block.to), section: SECTIONS.includes(block.section as Section) ? (block.section as Section) : 'quant', topic: asString(block.topic) || 'General' }))
     .filter((block) => Number.isInteger(block.from) && Number.isInteger(block.to) && block.from > 0 && block.to >= block.from)
@@ -221,8 +252,8 @@ export async function outlinePaper(pdfPart: PdfPart): Promise<{ title: string; b
 }
 
 /** Extracts one range of questions; the whole PDF is attached so shared passages and charts are visible. */
-export async function extractQuestions(pdfPart: PdfPart, from: number, to: number): Promise<QuestionSet[]> {
-  const result = await generateJson<{ sets?: ExtractedSet[] }>(async (key) => [await pdfPart(key), chunkPrompt(from, to)], extractionSchema, pdfPart.forget);
+export async function extractQuestions(pdfPart: PdfPart, from: number, to: number, budget: StepBudget): Promise<QuestionSet[]> {
+  const result = await generateJson<{ sets?: ExtractedSet[] }>(async (key) => [await pdfPart(key), chunkPrompt(from, to)], extractionSchema, budget, pdfPart.forget);
   return toQuestionSets(result.sets ?? []);
 }
 
@@ -261,7 +292,7 @@ function rejection(review: Review | undefined, candidate: SetContent) {
  * length and shape, an answer key that a separate review solves to the same answers, and difficulty
  * and wording at least as hard as the original. Returns the accepted versions and why others failed.
  */
-export async function writeVariants(sets: QuestionSet[], count = VARIANTS_PER_SET) {
+export async function writeVariants(sets: QuestionSet[], budget: StepBudget, count = VARIANTS_PER_SET) {
   const written = await generateJson<{ sets?: Array<{ id?: unknown; variants?: unknown[] }> }>(
     [VARIANTS_PROMPT(count), JSON.stringify(sets.map(({ id, section, topic, difficulty, original }) => ({
       id,
@@ -273,6 +304,7 @@ export async function writeVariants(sets: QuestionSet[], count = VARIANTS_PER_SE
       ...original,
     })))],
     variantsSchema,
+    budget,
   );
 
   const candidates: Array<{ id: string; set: QuestionSet; content: SetContent }> = [];
@@ -295,6 +327,7 @@ export async function writeVariants(sets: QuestionSet[], count = VARIANTS_PER_SE
       candidate: { passage: content.passage, questions: content.questions.map(({ text, options }) => ({ text, options })) },
     })))],
     reviewSchema,
+    budget,
   );
   const reviews = new Map((reviewed.reviews ?? []).map((review) => [asString(review.id), review]));
 

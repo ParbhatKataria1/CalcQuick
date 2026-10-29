@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, ArrowLeft, CheckCircle2, Eye, Loader2, Pencil, Play, ShieldCheck, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { mockApi } from '@/lib/mock-api';
+import { mockApi, withRetries } from '@/lib/mock-api';
 import { isTemplated, paperPattern, setsNeedingVersions } from '@/lib/mock-generator';
 import { useLoad } from '@/lib/use-load';
 import { cn } from '@/lib/utils';
@@ -46,6 +46,7 @@ export default function MockSourcePage({ params }: { params: Promise<{ sourceId:
 function ReadingPaper({ source, onDone }: { source: MockSource; onDone: () => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const stopRef = useRef(false);
   const startedRef = useRef(false);
@@ -56,7 +57,7 @@ function ReadingPaper({ source, onDone }: { source: MockSource; onDone: () => vo
     setError(null);
     try {
       for (;;) {
-        const step = await mockApi.importStep(source.id);
+        const step = await withRetries(() => mockApi.importStep(source.id), setWaiting);
         setProgress({ done: step.done, total: step.total });
         if (step.status === 'ready') {
           onDone();
@@ -67,6 +68,7 @@ function ReadingPaper({ source, onDone }: { source: MockSource; onDone: () => vo
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      setWaiting(null);
       setRunning(false);
     }
   }, [onDone, source.id]);
@@ -90,6 +92,7 @@ function ReadingPaper({ source, onDone }: { source: MockSource; onDone: () => vo
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Gemini reads the paper in parts of about 15 questions, so even long papers fit. Each part is saved as soon as it&apos;s done: you can stop, close this page or come back later.</p>
         <div className="mt-5 flex items-center gap-2 text-sm font-semibold">{running && <Loader2 className="size-4 animate-spin text-indigo-600" />} {label}</div>
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${progress ? (progress.done / progress.total) * 100 : 5}%` }} /></div>
+        {waiting && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{waiting}</p>}
         {error && <div className="mt-4 flex items-start gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"><AlertTriangle className="mt-0.5 size-4 shrink-0" /> {error}</div>}
         <div className="mt-5 flex gap-2">
           {running
@@ -111,6 +114,7 @@ function SourceSetup({ source, onChanged }: { source: MockSource; onChanged: () 
   const [starting, setStarting] = useState(false);
   const [writing, setWriting] = useState<Progress | null>(null);
   const [moreFor, setMoreFor] = useState<Section | null>(null);
+  const [waitingNote, setWaitingNote] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
   const stopRef = useRef(false);
   const autoStartedRef = useRef(false);
@@ -128,7 +132,7 @@ function SourceSetup({ source, onChanged }: { source: MockSource; onChanged: () 
     setMessage(null);
     try {
       for (;;) {
-        const result = await mockApi.generateVariants(source.id, { skip: progress.failed });
+        const result = await withRetries(() => mockApi.generateVariants(source.id, { skip: progress.failed }), (note) => setWaitingNote(note));
         progress = {
           done: total - result.remaining,
           total,
@@ -211,6 +215,7 @@ function SourceSetup({ source, onChanged }: { source: MockSource; onChanged: () 
             <Button variant="outline" size="sm" onClick={() => { stopRef.current = true; }}>Stop after this batch</Button>
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${writing.total ? (writing.done / writing.total) * 100 : 0}%` }} /></div>
+          {waitingNote && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{waitingNote}</p>}
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{writing.added} accepted · {writing.rejected} rejected so far. Each batch takes about a minute; you can start a test meanwhile, but sets without a version yet will repeat earlier ones.</p>
         </Card>
       )}
